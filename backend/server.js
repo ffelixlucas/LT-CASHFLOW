@@ -9,6 +9,7 @@ const { v4: uuidv4 } = require("uuid");
 const { logger } = require("./utils/logger");
 const { initDB } = require("./config/db");
 const { setContext } = require("./utils/logContext");
+const templateRoutes = require("./modules/_template/templateRoutes");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -41,6 +42,11 @@ app.get("/api/status", (req, res) => {
   logger.echo("✅ Servidor LT CashFlow está online!");
   res.json({ status: "ok", message: "LT CashFlow API rodando com sucesso!" });
 });
+
+// 🔹 Rotas do módulo template
+
+app.use("/api/template", templateRoutes);
+
 
 // 🔹 Página de monitoramento (acesse em http://localhost:4000/status)
 app.get("/status", statusMonitor().pageRoute);
