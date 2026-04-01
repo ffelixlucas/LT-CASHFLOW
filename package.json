@@ -1,0 +1,13 @@
+{
+  "name": "lt-cashflow",
+  "private": true,
+  "packageManager": "pnpm@10.30.3+sha512.c961d1e0a2d8e354ecaa5166b822516668b7f44cb5bd95122d590dd81922f606f5473b6d23ec4a5be05e7fcd18e8488d47d978bbe981872f1145d06e9a740017",
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
+    "lint": "pnpm --filter web lint",
+    "typecheck": "pnpm --filter web typecheck && pnpm --filter @ltcashflow/db typecheck && pnpm --filter @ltcashflow/validation typecheck",
+    "db:generate": "pnpm --filter @ltcashflow/db db:generate",
+    "db:migrate": "pnpm --filter @ltcashflow/db db:migrate"
+  }
+}

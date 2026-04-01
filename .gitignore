@@ -1,6 +1,18 @@
-# .gitignore na raiz
+# Workspace
 node_modules/
+.pnpm-store/
+
+# Build output
 dist/
+.next/
+out/
+coverage/
+
+# Env
 .env
+.env.local
+.env.*.local
+
+# OS / logs
 .DS_Store
 *.log
