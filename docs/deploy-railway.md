@@ -26,8 +26,7 @@ No Railway, em `Railway Config File`, use:
 Isso aplica:
 - builder `Railpack`
 - build com `corepack + pnpm`
-- copia `._next/static` e `public/` para dentro do standalone
-- start sem depender de `pnpm` em runtime
+- start com `next start` direto no app `apps/web`
 - healthcheck em `/api/health`
 - watch paths do monorepo
 
@@ -35,7 +34,7 @@ Isso aplica:
 
 O app já foi ajustado para deploy self-hosted no Railway:
 - `apps/web/next.config.ts` usa `output: "standalone"`
-- `apps/web/package.json` inicia com `node .next/standalone/apps/web/server.js`
+- o Railway usa `next start` direto no app `apps/web`, sem depender do pacote standalone
 
 ## Fluxo recomendado
 
@@ -79,12 +78,12 @@ Se você preferir configurar manualmente no painel, use:
 
 - Build command:
 ```bash
-corepack enable && corepack prepare pnpm@10.30.3 --activate && pnpm install --frozen-lockfile && pnpm --filter web build && mkdir -p apps/web/.next/standalone/apps/web/.next && rm -rf apps/web/.next/standalone/apps/web/.next/static apps/web/.next/standalone/apps/web/public && cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static && cp -R apps/web/public apps/web/.next/standalone/apps/web/public
+corepack enable && corepack prepare pnpm@10.30.3 --activate && pnpm install --frozen-lockfile && pnpm --filter web build
 ```
 
 - Start command:
 ```bash
-HOSTNAME=0.0.0.0 node apps/web/.next/standalone/apps/web/server.js
+PORT=${PORT:-3000} node apps/web/node_modules/next/dist/bin/next start apps/web -H 0.0.0.0 -p ${PORT:-3000}
 ```
 
 ## Observacoes
