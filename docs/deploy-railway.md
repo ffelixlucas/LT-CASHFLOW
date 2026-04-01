@@ -83,7 +83,7 @@ corepack enable && corepack prepare pnpm@10.30.3 --activate && pnpm install --fr
 
 - Start command:
 ```bash
-node apps/web/.next/standalone/apps/web/server.js
+HOSTNAME=0.0.0.0 node apps/web/.next/standalone/apps/web/server.js
 ```
 
 ## Observacoes
