@@ -33,8 +33,8 @@ Isso aplica:
 ## Antes do deploy
 
 O app já foi ajustado para deploy self-hosted no Railway:
-- `apps/web/next.config.ts` usa `output: "standalone"`
-- o Railway usa `next start` direto no app `apps/web`, sem depender do pacote standalone
+- `apps/web/next.config.ts` transpila os pacotes compartilhados do workspace
+- o Railway usa `next start` direto no app `apps/web`
 
 ## Fluxo recomendado
 
