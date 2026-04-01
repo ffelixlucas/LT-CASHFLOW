@@ -49,6 +49,15 @@ function money(value: string | null | undefined) {
   }).format(amount);
 }
 
+function todayLabel() {
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+    timeZone: "America/Sao_Paulo",
+  }).format(new Date());
+}
+
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   const user = await requireUser();
 
@@ -80,61 +89,84 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const cashAccounts = gestaoAtiva ? await listCashAccountBreakdown(gestaoAtiva.id) : [];
   const lancamentos = gestaoAtiva ? await listRecentLancamentos(gestaoAtiva.id) : [];
   const hoje = new Date().toISOString().slice(0, 10);
+  const dataHoje = todayLabel();
 
   return (
     <main className="min-h-screen bg-background px-2.5 py-2.5 sm:px-5 sm:py-6 lg:px-10 lg:py-10">
-      <div className="mx-auto max-w-7xl space-y-2.5 sm:space-y-3.5">
-        <header className="rounded-[1.45rem] border border-line bg-surface p-4 sm:p-6">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs tracking-[0.18em] text-muted uppercase">Dashboard</p>
-              <p className="mt-2 text-sm text-muted">{user.nome}</p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <SignOutButton />
-            </div>
-          </div>
-
-          <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <h1 className="font-heading text-3xl font-semibold sm:text-4xl">
+      <div className="mx-auto max-w-6xl space-y-2 sm:space-y-2.5">
+        <header className="rounded-[1.3rem] border border-line bg-surface p-3.5 sm:p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[11px] tracking-[0.18em] text-muted uppercase">Conta ativa</p>
+              <h1 className="mt-2 font-heading text-2xl font-semibold leading-tight sm:text-3xl">
                 {gestaoAtiva ? gestaoAtiva.nome : "Crie sua primeira gestao"}
               </h1>
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                {gestaoAtiva
-                  ? `Tipo ${gestaoAtiva.tipo} · ${contas.length} origens · ${categorias.length} categorias`
-                  : "Abra uma gestao para começar a conferir e registrar como em um extrato."}
-              </p>
+              <p className="mt-1.5 text-sm text-muted">{dataHoje}</p>
             </div>
 
             <div className="flex items-center gap-2">
               <Link
-                className="inline-flex items-center justify-center rounded-full border border-line bg-background px-4 py-2 text-sm font-medium text-foreground"
+                className="hidden items-center justify-center rounded-full border border-line bg-background px-3.5 py-2 text-sm font-medium text-foreground sm:inline-flex"
                 href="/"
               >
                 Home
               </Link>
-
-              {gestoes.length > 1 ? (
-                <div className="hidden flex-wrap gap-2 lg:flex">
-                  {gestoes.map((gestao) => (
-                    <Link
-                      className={`rounded-full px-4 py-2 text-sm ${
-                        gestaoAtiva?.id === gestao.id
-                          ? "bg-foreground text-white"
-                          : "border border-line bg-background"
-                      }`}
-                      href={`/dashboard?gestao=${gestao.id}`}
-                      key={gestao.id}
-                    >
-                      {gestao.nome}
-                    </Link>
-                  ))}
-                </div>
-              ) : null}
+              <SignOutButton />
             </div>
           </div>
+
+          <div className="mt-4 grid gap-2.5 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+            <section className="rounded-[1.15rem] border border-line bg-background px-4 py-4 sm:px-5 sm:py-5">
+              <p className="text-[11px] tracking-[0.18em] text-muted uppercase">Saldo em conta</p>
+              <p className="mt-3 font-heading text-4xl font-semibold leading-none sm:text-5xl">
+                {money(availableBalance)}
+              </p>
+              <p className="mt-3 text-sm text-muted">
+                {gestaoAtiva
+                  ? `${contas.length} origens · ${categorias.length} categorias · tipo ${gestaoAtiva.tipo}`
+                  : "Abra uma gestao para começar a conferir e registrar como em um extrato."}
+              </p>
+            </section>
+
+            <section className="grid grid-cols-3 gap-2">
+              <article className="rounded-[1rem] border border-line bg-background px-3 py-3.5">
+                <p className="text-[10px] tracking-[0.16em] text-muted uppercase">Entradas</p>
+                <p className="mt-2 text-lg font-semibold text-success sm:text-xl">
+                  {money(cashOverview.entradas_em_conta)}
+                </p>
+              </article>
+              <article className="rounded-[1rem] border border-line bg-background px-3 py-3.5">
+                <p className="text-[10px] tracking-[0.16em] text-muted uppercase">Despesas</p>
+                <p className="mt-2 text-lg font-semibold text-accent-strong sm:text-xl">
+                  {money(cashOverview.despesas)}
+                </p>
+              </article>
+              <article className="rounded-[1rem] border border-line bg-background px-3 py-3.5">
+                <p className="text-[10px] tracking-[0.16em] text-muted uppercase">Saidas</p>
+                <p className="mt-2 text-lg font-semibold text-accent-strong sm:text-xl">
+                  {money(cashOverview.saidas_da_conta)}
+                </p>
+              </article>
+            </section>
+          </div>
+
+          {gestoes.length > 1 ? (
+            <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+              {gestoes.map((gestao) => (
+                <Link
+                  className={`shrink-0 rounded-full px-4 py-2 text-sm ${
+                    gestaoAtiva?.id === gestao.id
+                      ? "bg-foreground text-white"
+                      : "border border-line bg-background text-foreground"
+                  }`}
+                  href={`/dashboard?gestao=${gestao.id}`}
+                  key={gestao.id}
+                >
+                  {gestao.nome}
+                </Link>
+              ))}
+            </div>
+          ) : null}
         </header>
 
         {status ? (
@@ -146,72 +178,33 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         <section className="space-y-3 sm:space-y-4">
           {gestaoAtiva ? (
             <>
-              {gestoes.length > 1 ? (
-                <section className="rounded-[1.15rem] border border-line bg-surface p-3 lg:hidden">
-                  <p className="text-[11px] tracking-[0.18em] text-muted uppercase">Trocar gestao</p>
-                  <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-                    {gestoes.map((gestao) => (
-                      <Link
-                        className={`shrink-0 rounded-full px-4 py-2 text-sm ${
-                          gestaoAtiva?.id === gestao.id
-                            ? "bg-foreground text-white"
-                            : "border border-line bg-background"
-                        }`}
-                        href={`/dashboard?gestao=${gestao.id}`}
-                        key={gestao.id}
-                      >
-                        {gestao.nome}
-                      </Link>
-                    ))}
-                  </div>
-                </section>
-              ) : null}
-
-              <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-                <article className="col-span-2 rounded-[1.25rem] border border-line bg-surface p-4 sm:p-5">
-                  <p className="text-xs tracking-[0.18em] text-muted uppercase">Saldo em conta</p>
-                  <p className="mt-3 font-heading text-4xl font-semibold sm:text-5xl">
-                    {money(availableBalance)}
-                  </p>
-                </article>
-                <article className="rounded-[1.05rem] border border-line bg-surface p-3 sm:p-4">
-                  <p className="text-xs tracking-[0.18em] text-muted uppercase">Entradas em conta</p>
-                  <p className="mt-3 font-heading text-2xl font-semibold sm:text-3xl">
-                    {money(cashOverview.entradas_em_conta)}
-                  </p>
-                </article>
-                <article className="rounded-[1.05rem] border border-line bg-surface p-3 sm:p-4">
-                  <p className="text-xs tracking-[0.18em] text-muted uppercase">Despesas</p>
-                  <p className="mt-3 font-heading text-2xl font-semibold sm:text-3xl">
-                    {money(cashOverview.despesas)}
-                  </p>
-                </article>
-                <article className="rounded-[1.05rem] border border-line bg-surface p-3 sm:p-4">
-                  <p className="text-xs tracking-[0.18em] text-muted uppercase">Saidas da conta</p>
-                  <p className="mt-3 font-heading text-2xl font-semibold sm:text-3xl">
-                    {money(cashOverview.saidas_da_conta)}
-                  </p>
-                </article>
-              </section>
+              <DashboardActionCenter
+                categorias={categorias}
+                contas={contas}
+                gestaoId={gestaoAtiva?.id ?? null}
+                hoje={hoje}
+              />
 
               {cashAccounts.length > 0 ? (
-                <section className="rounded-[1.3rem] border border-line bg-surface p-3 sm:p-5">
-                  <div>
-                    <p className="text-xs tracking-[0.18em] text-muted uppercase">
-                      Resumo de contas
-                    </p>
-                    <h3 className="mt-2 font-heading text-xl font-semibold sm:text-2xl">
-                      Conciliacao por origem
-                    </h3>
-                    <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">
-                      Cada origem mostra a formula real do saldo: saldo inicial + entradas - despesas - saídas da conta.
-                    </p>
-                  </div>
+                <details className="group rounded-[1.2rem] border border-line bg-surface p-3.5 sm:p-4">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] tracking-[0.18em] text-muted uppercase">
+                        Conciliacao por origem
+                      </p>
+                      <p className="mt-1 text-sm text-muted">
+                        Veja a formula de saldo de cada origem quando precisar conferir.
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-line bg-background px-3 py-1.5 text-xs font-medium text-foreground transition group-open:rotate-180">
+                      ˅
+                    </span>
+                  </summary>
 
                   <div className="mt-4 grid gap-3 xl:grid-cols-2">
                     {cashAccounts.map((account) => (
                       <article
-                        className="rounded-[1.15rem] border border-line bg-background p-4"
+                        className="rounded-[1.1rem] border border-line bg-background p-4"
                         key={account.id}
                       >
                         <div className="flex items-start justify-between gap-3">
@@ -274,15 +267,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                       </article>
                     ))}
                   </div>
-                </section>
+                </details>
               ) : null}
-
-              <DashboardActionCenter
-                categorias={categorias}
-                contas={contas}
-                gestaoId={gestaoAtiva?.id ?? null}
-                hoje={hoje}
-              />
 
               <section className="rounded-[1.3rem] border border-line bg-surface p-3 sm:p-5">
                 <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">

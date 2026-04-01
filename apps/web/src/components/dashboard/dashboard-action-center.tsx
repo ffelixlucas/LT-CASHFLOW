@@ -259,16 +259,15 @@ export function DashboardActionCenter({
 
   return (
     <>
-      <section className="rounded-[1.25rem] border border-line bg-surface p-3.5 sm:p-4">
-        <div className="flex flex-col gap-3">
+      <section className="rounded-[1.15rem] border border-line bg-surface p-3 sm:p-3.5">
+        <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs uppercase tracking-[0.18em] text-muted">Atalhos</p>
-            <p className="mt-1 hidden text-sm leading-6 text-muted sm:block">
-              Tudo que for cadastro ou novo registro abre sob demanda.
-            </p>
+            <p className="text-[11px] uppercase tracking-[0.18em] text-muted">Acoes rapidas</p>
+            <p className="mt-1 text-sm text-muted">Cadastre ou confira sem sair do extrato.</p>
           </div>
+        </div>
 
-          <div className="flex gap-2 overflow-x-auto pb-1">
+        <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
             {gestaoId ? (
               <>
                 <ActionButton onClick={() => setOpenModal("lancamento")} variant="primary">
@@ -282,7 +281,6 @@ export function DashboardActionCenter({
 
             <ActionButton onClick={() => setOpenModal("gestao")}>Gestao</ActionButton>
           </div>
-        </div>
       </section>
 
       <DashboardModal
