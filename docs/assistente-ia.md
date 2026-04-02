@@ -61,7 +61,9 @@ O objetivo do projeto e convergir para estas capacidades:
 - `analisar_entradas_por_origem`
 - `analisar_maiores_entradas`
 - `analisar_gastos_por_dia`
-- `calcular_percentual_receitas`
+- `calcular_percentual`
+- `calcular_media`
+- `projetar_periodo`
 - `conciliar_saldo_em_conta`
 - `conciliar_extrato_colado`
 - `criar_lancamento`
@@ -123,6 +125,8 @@ Exemplos:
 - `Quais foram nossas melhores entradas e por qual metodo entraram?`
 - `Qual o dia que mais gastamos essa semana?`
 - `Quanto e 10% do que ganhei?`
+- `Qual a media dos meus ganhos nesta semana?`
+- `Se continuarmos nesse ritmo, com quanto fechamos o mes?`
 
 ### 4. Sempre explicar o recorte
 
@@ -134,6 +138,20 @@ A resposta deve deixar claro o recorte consultado:
 - total de despesas
 - saldo
 - categoria, origem ou dia, quando aplicavel
+
+### 4.1 Perguntas analiticas obrigatorias
+
+O assistente deve conseguir responder, com base no banco real:
+
+- percentual sobre ganhos ou gastos
+- media por lancamento e media por dia no periodo
+- projecao simples mantendo o ritmo atual do periodo
+
+Exemplos:
+
+- `Quanto e 10% dos meus ganhos semanais?`
+- `Qual a media dos meus ganhos esta semana?`
+- `Se continuarmos nesse ritmo, com quanto fechamos este mes?`
 
 ### 5. Entradas devem informar origem e metodo
 

@@ -384,7 +384,11 @@ function normalizeSearchText(text: string | undefined) {
   }
 
   const cleaned = text
-    .replace(/\b(qual|quanto|quais|ultimo|ultima|maior|menor|foi|me mostra|buscar|busca|agora|so|só|apenas|somente)\b/gi, " ")
+    .replace(
+      /\b(qual|quanto|quais|ultimo|ultima|maior|menor|foi|me mostra|buscar|busca|agora|so|só|apenas|somente|gastei|gastamos|recebi|recebemos|entrou|ganhei|ganhamos|minha|minhas|meus|meu|nosso|nossa|nossos|nossas|essa|esta|nesse|neste|semana|mes|mês|hoje|ontem|de|do|da|no|na|em|por|pra|para|cartao|cartão|credito|crédito|debito|débito|pix|receita|receitas|despesa|despesas|gasto|gastos)\b/gi,
+      " ",
+    )
+    .replace(/[?.,!]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -582,12 +586,38 @@ function normalizeTimeframe(value: unknown) {
 
   if (["today", "hoje"].includes(normalized)) return "today" as const;
   if (["yesterday", "ontem"].includes(normalized)) return "yesterday" as const;
-  if (["this_week", "esta_semana", "essa_semana", "nessa_semana", "semana"].includes(normalized)) {
+  if (
+    [
+      "this_week",
+      "esta_semana",
+      "essa_semana",
+      "nessa_semana",
+      "semana",
+      "semanal",
+      "semanais",
+      "por semana",
+      "por_semana",
+      "semanis",
+    ].includes(normalized)
+  ) {
     return "this_week" as const;
   }
   if (["last_week", "semana_passada"].includes(normalized)) return "last_week" as const;
   if (["last_7_days", "ultimos_7_dias", "ultimos7dias"].includes(normalized)) return "last_7_days" as const;
-  if (["this_month", "este_mes", "esse_mes", "nesse_mes", "mes"].includes(normalized)) {
+  if (
+    [
+      "this_month",
+      "este_mes",
+      "esse_mes",
+      "nesse_mes",
+      "mes",
+      "mensal",
+      "mensais",
+      "por mes",
+      "por mês",
+      "por_mes",
+    ].includes(normalized)
+  ) {
     return "this_month" as const;
   }
   if (["last_month", "mes_passado"].includes(normalized)) return "last_month" as const;
@@ -620,6 +650,19 @@ function normalizeInsightAction(value: unknown) {
     return "top_spend_day" as const;
   }
   if (["risk_review", "risco", "insight_risco"].includes(normalized)) return "risk_review" as const;
+  if (
+    ["percentage", "percentual", "calcular_percentual", "income_percentage", "percentual_receita", "dez_por_cento"].includes(
+      normalized,
+    )
+  ) {
+    return "percentage" as const;
+  }
+  if (["average", "media", "media_receita", "media_ganho", "media_entrada"].includes(normalized)) {
+    return "average" as const;
+  }
+  if (["projection", "projecao", "projeção", "ritmo", "cenario", "cenário", "simulacao", "simulação"].includes(normalized)) {
+    return "projection" as const;
+  }
   if (["income_percentage", "percentual_receita", "dez_por_cento"].includes(normalized)) {
     return "income_percentage" as const;
   }
@@ -629,6 +672,86 @@ function normalizeInsightAction(value: unknown) {
   if (["search", "busca"].includes(normalized)) return "search" as const;
 
   return "search" as const;
+}
+
+const PERCENTAGE_WORDS: Record<string, number> = {
+  cinco: 5,
+  dez: 10,
+  quinze: 15,
+  vinte: 20,
+  vinteecinco: 25,
+  trinta: 30,
+  quarenta: 40,
+  cinquenta: 50,
+  sessenta: 60,
+  setenta: 70,
+  oitenta: 80,
+  noventa: 90,
+  cem: 100,
+};
+
+function extractRequestedPercentage(prompt: string) {
+  const normalized = normalizeText(prompt);
+  const numericMatch = normalized.match(/(\d{1,3}(?:[.,]\d+)?)\s*%/);
+
+  if (numericMatch?.[1]) {
+    const parsed = Number(numericMatch[1].replace(",", "."));
+    return Number.isFinite(parsed) && parsed > 0 && parsed <= 100 ? parsed : null;
+  }
+
+  const porCentoMatch = normalized.match(/(\d{1,3}(?:[.,]\d+)?)\s*por cento/);
+
+  if (porCentoMatch?.[1]) {
+    const parsed = Number(porCentoMatch[1].replace(",", "."));
+    return Number.isFinite(parsed) && parsed > 0 && parsed <= 100 ? parsed : null;
+  }
+
+  const wordMatch = normalized.match(
+    /\b(cinco|dez|quinze|vinte(?: e cinco)?|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa|cem)\b por cento/,
+  );
+
+  if (!wordMatch?.[1]) {
+    return null;
+  }
+
+  const token = wordMatch[1].replace(/\s+/g, "");
+  return PERCENTAGE_WORDS[token] ?? null;
+}
+
+function detectInsightTimeframe(prompt: string) {
+  const normalized = normalizeText(prompt);
+
+  if (normalized.includes("semana passada")) return "last_week" as const;
+  if (
+    /(esta semana|essa semana|nessa semana|da semana|na semana|por semana|semanal|semanais|semanis)/.test(normalized)
+  ) {
+    return "this_week" as const;
+  }
+  if (normalized.includes("ultimos 7 dias") || normalized.includes("últimos 7 dias")) {
+    return "last_7_days" as const;
+  }
+  if (normalized.includes("mes passado")) return "last_month" as const;
+  if (/(este mes|esse mes|nesse mes|do mes|no mes|por mes|mensal|mensais)/.test(normalized)) {
+    return "this_month" as const;
+  }
+  if (normalized.includes("hoje")) return "today" as const;
+  if (normalized.includes("ontem")) return "yesterday" as const;
+
+  return "all_time" as const;
+}
+
+function inferInsightTipo(prompt: string) {
+  const normalized = normalizeText(prompt);
+
+  if (/(ganhei|ganho|ganhos|receita|receitas|entrada|entradas|recebi|recebimentos)/.test(normalized)) {
+    return "receita" as const;
+  }
+
+  if (/(gasto|gastos|despesa|despesas|saida|saidas|paguei|pagamos)/.test(normalized)) {
+    return "despesa" as const;
+  }
+
+  return undefined;
 }
 
 function normalizeRemoteInsightPlan(remote: unknown): AssistantInsightPlan | null {
@@ -679,6 +802,7 @@ function normalizeRemoteSearchPlan(remote: unknown): AssistantSearchPlan | null 
     filters: {
       text: normalizeOptionalString(rawFilters.text),
       tipo: normalizeTipo(rawFilters.tipo),
+      meio: detectMeio(String(rawFilters.meio ?? "")),
       contaId: normalizePositiveNumber(rawFilters.contaId),
       categoriaId: normalizePositiveNumber(rawFilters.categoriaId),
       minValor,
@@ -1144,6 +1268,7 @@ function buildFilterFromPrompt(
   const conta = findMentionedOption(prompt, contas);
   const categoria = findMentionedCategoria(prompt, categorias);
   const amount = extractAmount(prompt);
+  const meio = detectMeio(prompt);
   let dateFrom: string | undefined;
   let dateTo: string | undefined;
 
@@ -1192,6 +1317,7 @@ function buildFilterFromPrompt(
   return aiSearchFilterSchema.parse({
     text,
     tipo,
+    meio,
     contaId: conta?.id,
     categoriaId: categoria?.id,
     minValor,
@@ -1228,6 +1354,7 @@ function clearFiltersWithoutExplicitMention(
     ...filters,
     contaId: explicitConta ? filters.contaId : undefined,
     categoriaId: explicitCategoria ? filters.categoriaId : undefined,
+    meio: detectMeio(prompt) ?? filters.meio,
     text: genericSearch ? undefined : normalizeSearchText(filters.text),
     motivo: filters.motivo,
   });
@@ -1329,6 +1456,7 @@ export function refineAssistantSearchPlan(
   const explicitCategoria = findMentionedCategoria(prompt, categorias);
   const amount = extractAmount(prompt);
   const dateFilter = extractRelativeDateFilter(prompt);
+  const explicitMeio = detectMeio(prompt);
 
   const update: Partial<AiSearchFilter> = {
     motivo: "Refinei os filtros com base no contexto anterior da conversa.",
@@ -1350,6 +1478,10 @@ export function refineAssistantSearchPlan(
 
   if (explicitCategoria) {
     update.categoriaId = explicitCategoria.id;
+  }
+
+  if (explicitMeio) {
+    update.meio = explicitMeio;
   }
 
   if (dateFilter) {
@@ -1449,6 +1581,7 @@ function localSearchPlan(
       filters: {
         ...filters,
         tipo,
+        meio: filters.meio,
         text: filters.categoriaId ? undefined : filters.text,
       },
       answerHint: "Calcular um total resumido dentro do periodo e contexto pedidos.",
@@ -1721,25 +1854,7 @@ function localInsightPlan(
   const normalized = normalizeText(prompt);
   const filters = buildFilterFromPrompt(prompt, contas, categorias);
   const dateFilter = extractRelativeDateFilter(prompt);
-  const timeframe =
-    normalized.includes("semana passada")
-      ? "last_week"
-      : normalized.includes("esta semana") ||
-          normalized.includes("essa semana") ||
-          normalized.includes("nessa semana") ||
-          normalized.includes("da semana")
-        ? "this_week"
-        : normalized.includes("ultimos 7 dias") || normalized.includes("últimos 7 dias")
-          ? "last_7_days"
-          : normalized.includes("mes passado")
-            ? "last_month"
-            : normalized.includes("este mes") || normalized.includes("esse mes") || normalized.includes("nesse mes")
-              ? "this_month"
-              : normalized.includes("hoje")
-                ? "today"
-                : normalized.includes("ontem")
-                  ? "yesterday"
-                  : "all_time";
+  const timeframe = detectInsightTimeframe(prompt);
 
   if (
     /(o que voce faz|o que vc faz|como voce ajuda|como vc ajuda|o que consegue fazer|o que eu posso pedir|como posso usar|me ajuda a usar|me ajude a usar|que tipo de comando|quais comandos)/.test(
@@ -1821,15 +1936,39 @@ function localInsightPlan(
     });
   }
 
-  if (/(10%|dez por cento)/.test(normalized) && /(ganhei|recebi|receita|receitas|entrou|entradas)/.test(normalized)) {
+  const requestedPercentage = extractRequestedPercentage(prompt);
+
+  if (requestedPercentage && inferInsightTipo(prompt)) {
     return assistantInsightPlanSchema.parse({
-      action: "income_percentage",
+      action: "percentage",
       timeframe: timeframe === "all_time" ? "this_month" : timeframe,
-      tipo: "receita",
-      percentage: 10,
+      tipo: inferInsightTipo(prompt),
+      percentage: requestedPercentage,
       ...filters,
-      answerHint: "Calcular 10% das receitas do periodo.",
-      motivo: "Pergunta de percentual sobre receitas identificada localmente.",
+      answerHint: "Calcular o percentual pedido sobre o total do periodo.",
+      motivo: "Pergunta de percentual financeiro identificada localmente.",
+    });
+  }
+
+  if (/(media|média)/.test(normalized) && inferInsightTipo(prompt)) {
+    return assistantInsightPlanSchema.parse({
+      action: "average",
+      timeframe: timeframe === "all_time" ? "this_month" : timeframe,
+      tipo: inferInsightTipo(prompt),
+      ...filters,
+      answerHint: "Calcular media por lancamento e media diaria no periodo pedido.",
+      motivo: "Pergunta de media financeira identificada localmente.",
+    });
+  }
+
+  if (/(nesse ritmo|neste ritmo|se continuar|se continuarmos|projecao|projeção|cenario|cenário|simular|simulação)/.test(normalized)) {
+    return assistantInsightPlanSchema.parse({
+      action: "projection",
+      timeframe: timeframe === "all_time" ? "this_month" : timeframe,
+      tipo: inferInsightTipo(prompt),
+      ...filters,
+      answerHint: "Projetar o fechamento do periodo mantendo o ritmo atual.",
+      motivo: "Pergunta de projeção financeira identificada localmente.",
     });
   }
 
@@ -1913,7 +2052,9 @@ Valores aceitos para action:
  - top_income_entries
  - top_spend_day
 - risk_review
-- income_percentage
+- percentage
+- average
+- projection
  - balance_check
 - search
 Valores aceitos para timeframe:

@@ -247,6 +247,7 @@ export function GlobalAssistant({
   const [editingQuickAddSuggestion, setEditingQuickAddSuggestion] = useState<QuickAddSuggestion | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const scrollPositionRef = useRef(0);
 
   useEffect(() => {
     const storedGestao = localStorage.getItem(GESTAO_KEY);
@@ -308,6 +309,35 @@ export function GlobalAssistant({
 
     return () => window.cancelAnimationFrame(frame);
   }, [open, messages]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    scrollPositionRef.current = window.scrollY;
+
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousBodyPosition = document.body.style.position;
+    const previousBodyTop = document.body.style.top;
+    const previousBodyWidth = document.body.style.width;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+
+    document.documentElement.style.overflow = "hidden";
+    document.body.style.overflow = "hidden";
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${scrollPositionRef.current}px`;
+    document.body.style.width = "100%";
+
+    return () => {
+      document.documentElement.style.overflow = previousHtmlOverflow;
+      document.body.style.overflow = previousBodyOverflow;
+      document.body.style.position = previousBodyPosition;
+      document.body.style.top = previousBodyTop;
+      document.body.style.width = previousBodyWidth;
+      window.scrollTo(0, scrollPositionRef.current);
+    };
+  }, [open]);
 
   useEffect(() => {
     const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
@@ -952,7 +982,7 @@ export function GlobalAssistant({
   return (
     <>
       <button
-        className={`fixed right-4 bottom-4 z-50 rounded-full bg-foreground px-4 py-2.5 text-xs font-semibold text-white shadow-[0_18px_50px_rgba(30,42,47,0.18)] transition-opacity duration-200 sm:right-5 sm:bottom-5 sm:px-5 sm:py-3 sm:text-sm lg:right-6 ${
+        className={`fixed right-3 bottom-3 z-50 rounded-full bg-foreground px-4 py-2.5 text-xs font-semibold text-white shadow-[0_18px_50px_rgba(30,42,47,0.18)] transition-opacity duration-200 sm:right-5 sm:bottom-5 sm:px-5 sm:py-3 sm:text-sm lg:right-6 ${
           open ? "pointer-events-none opacity-0" : "opacity-100"
         }`}
         onClick={() => setOpen((current) => !current)}
@@ -962,27 +992,34 @@ export function GlobalAssistant({
         <span className="hidden sm:inline">Abrir assistente</span>
       </button>
 
+      <div
+        className={`fixed inset-0 z-30 bg-black/22 backdrop-blur-[1px] transition-opacity duration-300 ${
+          open ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
+        }`}
+        onClick={() => setOpen(false)}
+      />
+
       <aside
-        className={`fixed top-0 right-0 z-40 flex h-screen w-full max-w-md flex-col border-l border-line bg-surface shadow-[0_0_60px_rgba(30,42,47,0.12)] transition-transform duration-300 ${
+        className={`fixed inset-y-0 right-0 z-40 flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden border-l border-line bg-surface shadow-[0_0_60px_rgba(30,42,47,0.12)] transition-transform duration-300 sm:max-w-md ${
           open ? "translate-x-0" : "translate-x-full"
         }`}
       >
-        <header className="border-b border-line px-5 py-4">
+        <header className="shrink-0 border-b border-line px-4 py-3 sm:px-5 sm:py-4">
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-xs tracking-[0.18em] text-muted uppercase">Assistente LT</p>
-              <h2 className="mt-2 font-heading text-2xl font-semibold">Chat lateral</h2>
+              <h2 className="mt-2 font-heading text-xl font-semibold sm:text-2xl">Chat lateral</h2>
             </div>
             <div className="flex items-center gap-2">
               <button
-                className="rounded-full border border-line px-3 py-1 text-sm text-muted"
+                className="rounded-full border border-line px-3 py-1.5 text-xs font-medium text-muted sm:text-sm"
                 onClick={handleNewConversation}
                 type="button"
               >
-                Nova conversa
+                Nova
               </button>
               <button
-                className="rounded-full border border-line px-3 py-1 text-sm text-muted"
+                className="rounded-full border border-line px-3 py-1.5 text-xs font-medium text-muted sm:text-sm"
                 onClick={() => setOpen(false)}
                 type="button"
               >
@@ -996,7 +1033,7 @@ export function GlobalAssistant({
               Gestao ativa
             </label>
             <select
-              className="w-full rounded-2xl border border-line bg-background px-4 py-3 text-sm"
+              className="w-full rounded-2xl border border-line bg-background px-4 py-3 text-base sm:text-sm"
               id="gestao-assistente"
               onChange={(event) => setSelectedGestaoId(Number(event.target.value))}
               value={selectedGestao?.id ?? ""}
@@ -1010,17 +1047,22 @@ export function GlobalAssistant({
           </div>
         </header>
 
-        <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 pb-32" ref={messagesContainerRef}>
+        <div
+          className="flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 py-3 pb-28 sm:space-y-4 sm:px-4 sm:py-4 sm:pb-32"
+          ref={messagesContainerRef}
+        >
           {messages.map((message) => (
             <article
-              className={`rounded-[1.5rem] px-4 py-3 ${
+              className={`max-w-full overflow-hidden rounded-[1.35rem] px-3.5 py-3 sm:rounded-[1.5rem] sm:px-4 ${
                 message.role === "user"
-                  ? "ml-10 bg-foreground text-white"
-                  : "mr-6 border border-line bg-background"
+                  ? "ml-6 bg-foreground text-white sm:ml-10"
+                  : "mr-2 border border-line bg-background sm:mr-6"
               }`}
               key={message.id}
             >
-              <p className="text-sm leading-7">{message.text}</p>
+              <p className="whitespace-pre-wrap break-words text-[15px] leading-8 sm:text-sm sm:leading-7">
+                {message.text}
+              </p>
 
               {message.role === "assistant" ? (
                 <>
@@ -1057,7 +1099,7 @@ export function GlobalAssistant({
                                   value={editingQuickAddSuggestion.descricao}
                                 />
 
-                                <div className="grid grid-cols-2 gap-2">
+                                <div className="grid gap-2 sm:grid-cols-2">
                                   <input
                                     className="w-full rounded-2xl border border-line bg-background px-4 py-3"
                                     min="0.01"
@@ -1191,7 +1233,7 @@ export function GlobalAssistant({
                               </div>
                             ) : (
                               <>
-                                <p>
+                                <p className="break-words">
                                   <strong>Descricao:</strong> {suggestion.descricao}
                                 </p>
                                 <p>
@@ -1422,7 +1464,7 @@ export function GlobalAssistant({
                     <div className="mt-4 space-y-2">
                       {message.results.slice(0, 5).map((result) => (
                         <div className="rounded-2xl bg-surface px-3 py-3 text-sm" key={result.id}>
-                          <p className="font-medium">{result.descricao}</p>
+                          <p className="break-words font-medium">{result.descricao}</p>
                           <p className="mt-1 text-muted">
                             {result.competencia_data} · {result.conta_nome} · {money(result.valor_total)}
                           </p>
@@ -1436,10 +1478,10 @@ export function GlobalAssistant({
           ))}
         </div>
 
-        <div className="border-t border-line px-4 py-4 pb-24 lg:pb-4">
-          <div className="rounded-[1.5rem] border border-line bg-background p-3">
+        <div className="shrink-0 border-t border-line bg-surface px-3 pb-[calc(env(safe-area-inset-bottom)+12px)] pt-3 sm:px-4 sm:py-4">
+          <div className="rounded-[1.35rem] border border-line bg-background p-3 sm:rounded-[1.5rem]">
             <textarea
-              className="min-h-28 w-full resize-none bg-transparent text-sm outline-none"
+              className="min-h-20 max-h-40 w-full resize-none bg-transparent text-[15px] leading-7 outline-none sm:min-h-28 sm:text-sm"
               onKeyDown={handleKeyDown}
               onChange={(event) => setPrompt(event.target.value)}
               placeholder="Pergunte sobre os lancamentos, fale no microfone ou descreva uma compra..."
@@ -1447,12 +1489,12 @@ export function GlobalAssistant({
             />
             {voiceError ? <p className="mt-2 text-xs text-[var(--color-danger,#b42318)]">{voiceError}</p> : null}
             <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="max-w-xs text-xs text-muted">
+              <p className="max-w-xs text-xs leading-5 text-muted">
                 Exemplo: qual foi o ultimo lancamento? / mercado 182,90 hoje / toque em Falar
               </p>
-              <div className="flex items-center gap-2 self-end">
+              <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:items-center sm:gap-2">
                 <button
-                  className={`rounded-full border px-4 py-2 text-sm font-semibold ${
+                  className={`rounded-full border px-4 py-3 text-sm font-semibold ${
                     voiceListening
                       ? "border-accent bg-accent text-white"
                       : "border-line bg-surface text-foreground"
@@ -1464,7 +1506,7 @@ export function GlobalAssistant({
                   {voiceListening ? "Ouvindo..." : "Falar"}
                 </button>
                 <button
-                  className="rounded-full bg-foreground px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  className="rounded-full bg-foreground px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
                   disabled={!prompt.trim() || loading || !selectedGestaoId}
                   onClick={handleSubmit}
                   type="button"

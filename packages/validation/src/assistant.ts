@@ -91,6 +91,7 @@ export const deleteLancamentosSuggestionSchema = z.object({
 export const aiSearchFilterSchema = z.object({
   text: z.string().optional(),
   tipo: z.enum(["receita", "despesa", "ajuste"]).optional(),
+  meio: lancamentoMeioSchema.optional(),
   contaId: z.number().int().positive().optional(),
   categoriaId: z.number().int().positive().optional(),
   minValor: z.number().positive().optional(),
@@ -125,6 +126,9 @@ export const assistantInsightPlanSchema = z.object({
     "top_income_entries",
     "top_spend_day",
     "risk_review",
+    "percentage",
+    "average",
+    "projection",
     "income_percentage",
     "balance_check",
     "search",

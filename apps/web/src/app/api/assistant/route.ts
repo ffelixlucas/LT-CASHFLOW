@@ -32,6 +32,7 @@ import {
   listContas,
   listRecentLancamentos,
   searchLancamentos,
+  sumLancamentos,
   summarizeLancamentos,
   summarizeLancamentosByConta,
   summarizeLancamentosByDia,
@@ -323,7 +324,7 @@ function detectPeriodFilter(prompt: string) {
     return weekBounds(-1);
   }
 
-  if (normalized.includes("semana")) {
+  if (/(esta semana|essa semana|nessa semana|da semana|na semana|por semana|semanal|semanais|semanis|\bsemana\b)/.test(normalized)) {
     return weekBounds(0);
   }
 
@@ -335,7 +336,7 @@ function detectPeriodFilter(prompt: string) {
     return monthBounds(-1);
   }
 
-  if (normalized.includes("este mes") || normalized.includes("esse mes") || normalized.includes("nesse mes")) {
+  if (/(este mes|esse mes|nesse mes|do mes|no mes|por mes|mensal|mensais)/.test(normalized)) {
     return monthBounds(0);
   }
 
@@ -356,18 +357,157 @@ function periodLabel(prompt: string) {
   const normalized = normalizeText(prompt);
 
   if (normalized.includes("semana passada")) return "na semana passada";
-  if (normalized.includes("semana")) {
+  if (/(esta semana|essa semana|nessa semana|da semana|na semana|por semana|semanal|semanais|semanis|\bsemana\b)/.test(normalized)) {
     return "nesta semana";
   }
   if (normalized.includes("ultimos 7 dias") || normalized.includes("últimos 7 dias")) return "nos ultimos 7 dias";
   if (normalized.includes("mes passado")) return "no mes passado";
-  if (normalized.includes("este mes") || normalized.includes("esse mes") || normalized.includes("nesse mes")) {
+  if (/(este mes|esse mes|nesse mes|do mes|no mes|por mes|mensal|mensais)/.test(normalized)) {
     return "neste mes";
   }
   if (normalized.includes("hoje")) return "hoje";
   if (normalized.includes("ontem")) return "ontem";
 
   return "no periodo consultado";
+}
+
+function timeframeLabel(
+  timeframe: "all_time" | "today" | "yesterday" | "this_week" | "last_week" | "last_7_days" | "this_month" | "last_month",
+) {
+  if (timeframe === "today") return "hoje";
+  if (timeframe === "yesterday") return "ontem";
+  if (timeframe === "this_week") return "nesta semana";
+  if (timeframe === "last_week") return "na semana passada";
+  if (timeframe === "last_7_days") return "nos ultimos 7 dias";
+  if (timeframe === "this_month") return "neste mes";
+  if (timeframe === "last_month") return "no mes passado";
+  return "no periodo consultado";
+}
+
+function resolvePeriodLabel(
+  prompt: string,
+  fallbackTimeframe: "all_time" | "today" | "yesterday" | "this_week" | "last_week" | "last_7_days" | "this_month" | "last_month",
+) {
+  const label = periodLabel(prompt);
+  return label === "no periodo consultado" ? timeframeLabel(fallbackTimeframe) : label;
+}
+
+const PERCENTAGE_WORDS: Record<string, number> = {
+  cinco: 5,
+  dez: 10,
+  quinze: 15,
+  vinte: 20,
+  vinteecinco: 25,
+  trinta: 30,
+  quarenta: 40,
+  cinquenta: 50,
+  sessenta: 60,
+  setenta: 70,
+  oitenta: 80,
+  noventa: 90,
+  cem: 100,
+};
+
+function extractRequestedPercentage(prompt: string) {
+  const normalized = normalizeText(prompt);
+  const percentMatch = normalized.match(/(\d{1,3}(?:[.,]\d+)?)\s*%/);
+
+  if (percentMatch?.[1]) {
+    const parsed = Number(percentMatch[1].replace(",", "."));
+    return Number.isFinite(parsed) && parsed > 0 && parsed <= 100 ? parsed : null;
+  }
+
+  const porCentoMatch = normalized.match(/(\d{1,3}(?:[.,]\d+)?)\s*por cento/);
+
+  if (porCentoMatch?.[1]) {
+    const parsed = Number(porCentoMatch[1].replace(",", "."));
+    return Number.isFinite(parsed) && parsed > 0 && parsed <= 100 ? parsed : null;
+  }
+
+  const wordMatch = normalized.match(
+    /\b(cinco|dez|quinze|vinte(?: e cinco)?|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa|cem)\b por cento/,
+  );
+
+  if (!wordMatch?.[1]) {
+    return null;
+  }
+
+  return PERCENTAGE_WORDS[wordMatch[1].replace(/\s+/g, "")] ?? null;
+}
+
+function inferAnalyticalTipo(prompt: string) {
+  const normalized = normalizeText(prompt);
+
+  if (/(ganhei|ganho|ganhos|receita|receitas|entrada|entradas|recebi|recebimentos)/.test(normalized)) {
+    return "receita" as const;
+  }
+
+  if (/(gastei|gasto|gastos|despesa|despesas|saida|saidas|paguei|pagamos)/.test(normalized)) {
+    return "despesa" as const;
+  }
+
+  return undefined;
+}
+
+function inferProjectionMetric(prompt: string) {
+  const normalized = normalizeText(prompt);
+
+  if (/(saldo|sobrar|sobra|quanto dinheiro|caixa)/.test(normalized)) {
+    return "saldo" as const;
+  }
+
+  return inferAnalyticalTipo(prompt) ?? "receita";
+}
+
+function looksLikePercentageQuestion(prompt: string) {
+  return extractRequestedPercentage(prompt) !== null && Boolean(inferAnalyticalTipo(prompt));
+}
+
+function looksLikeAverageQuestion(prompt: string) {
+  const normalized = normalizeText(prompt);
+  return /(media|média)/.test(normalized) && Boolean(inferAnalyticalTipo(prompt));
+}
+
+function looksLikeTotalQuestion(prompt: string) {
+  const normalized = normalizeText(prompt);
+  return (
+    /(quanto gastei|quanto gastamos|quanto recebi|quanto recebemos|quantos recebi|quantos recebemos|quanto entrou|qual minha receita|qual minha despesa|total gasto|total de receitas|total de entradas)/.test(
+      normalized,
+    ) &&
+    /(semana|semanal|semanais|semanis|mes|mês|mensal|hoje|ontem|cartao|cartão|credito|crédito|debito|débito|pix|mercado|ivaipora|ivaiporã|origem|conta)/.test(
+      normalized,
+    )
+  );
+}
+
+function looksLikeTopExpenseListQuestion(prompt: string) {
+  const normalized = normalizeText(prompt);
+  return /(quais.*maiores gastos|quais.*maiores despesas|meus maiores gastos|minhas maiores despesas|top gastos|top despesas)/.test(
+    normalized,
+  );
+}
+
+function looksLikeProjectionQuestion(prompt: string) {
+  const normalized = normalizeText(prompt);
+  return (
+    /(nesse ritmo|neste ritmo|se continuar|se continuarmos|projecao|projeção|cenario|cenário|simular|simulação)/.test(
+      normalized,
+    ) &&
+    /(ganho|ganhos|receita|receitas|entrada|entradas|gasto|gastos|despesa|despesas|saldo|sobrar|sobra|dinheiro)/.test(
+      normalized,
+    )
+  );
+}
+
+function daysBetweenInclusive(from: string, to: string) {
+  const start = new Date(`${from}T00:00:00`);
+  const end = new Date(`${to}T00:00:00`);
+  const diff = end.getTime() - start.getTime();
+  return Math.max(1, Math.floor(diff / 86_400_000) + 1);
+}
+
+function minDateString(left: string, right: string) {
+  return left <= right ? left : right;
 }
 
 function looksLikeDirectSummary(prompt: string) {
@@ -390,11 +530,6 @@ function looksLikeRiskQuestion(prompt: string) {
   return /(tomar cuidado|ficar atento|preocupa|preocupando|qual gasto.*cuidado|onde devo cortar|maior risco)/.test(
     normalized,
   );
-}
-
-function looksLikeIncomePercentageQuestion(prompt: string) {
-  const normalized = normalizeText(prompt);
-  return (/(10%|dez por cento)/.test(normalized) && /(ganhei|recebi|receita|receitas|entrou|entradas)/.test(normalized));
 }
 
 function looksLikeIncomeSourceSummary(prompt: string) {
@@ -683,6 +818,16 @@ function mentionsOrigens(normalized: string) {
 
 function looksLikeInventoryQuestion(prompt: string) {
   const normalized = normalizeText(prompt);
+
+  if (
+    looksLikeTotalQuestion(prompt) ||
+    looksLikeTopSpend(prompt) ||
+    looksLikeTopExpenseListQuestion(prompt) ||
+    looksLikeTopSpendDay(prompt) ||
+    looksLikeIncomeSourceSummary(prompt)
+  ) {
+    return false;
+  }
 
   return (
     /(quais|qual|que|listar|lista|mostra|me mostra|temos|tem|ha|há|existem|existe|cadastrado|cadastradas|cadastrados)/.test(
@@ -1067,6 +1212,42 @@ ${prompt}`
     });
   }
 
+  if (looksLikeTopExpenseListQuestion(prompt)) {
+    const period = detectPeriodFilter(prompt) ?? monthBounds(0);
+    const results = await searchLancamentos({
+      gestaoId,
+      tipo: "despesa",
+      meio: detectRequestedMeio(prompt) ?? undefined,
+      dateFrom: period.from,
+      dateTo: period.to,
+    });
+    const topExpenses = [...results]
+      .sort((left, right) => Number(right.valor_total) - Number(left.valor_total))
+      .slice(0, 5);
+
+    const fallback =
+      topExpenses.length > 0
+        ? `Seus maiores gastos ${periodLabel(prompt)} foram ${topExpenses
+            .map((item) => `"${item.descricao}" com ${money(item.valor_total)} em ${item.competencia_data}`)
+            .join(" · ")}.`
+        : `Nao encontrei despesas ${periodLabel(prompt)}.`;
+    const narrated = await narrate({
+      fallback,
+      style: topExpenses.length > 0 ? "result" : "not_found",
+      facts: topExpenses.map(
+        (item) => `${item.descricao} em ${item.competencia_data}, ${money(item.valor_total)}, origem ${item.conta_nome}.`,
+      ),
+      baseProvider: "local",
+    });
+
+    return NextResponse.json({
+      kind: "search",
+      provider: narrated.provider,
+      answer: narrated.answer,
+      results: topExpenses,
+    });
+  }
+
   if (looksLikeIncomeSourceSummary(prompt)) {
     const period = detectPeriodFilter(prompt) ?? monthBounds(0);
     const resumo = await summarizeLancamentos({
@@ -1110,6 +1291,76 @@ ${prompt}`
       provider: narrated.provider,
       answer: narrated.answer,
       results,
+    });
+  }
+
+  if (looksLikeTotalQuestion(prompt)) {
+    const period = detectPeriodFilter(prompt) ?? monthBounds(0);
+    const tipo = inferAnalyticalTipo(prompt) ?? "despesa";
+    const requestedMeio = detectRequestedMeio(prompt) ?? undefined;
+    const resumo = await summarizeLancamentos({
+      gestaoId,
+      tipo,
+      meio: requestedMeio,
+      dateFrom: period.from,
+      dateTo: period.to,
+      text: undefined,
+    });
+    const results = await searchLancamentos({
+      gestaoId,
+      tipo,
+      meio: requestedMeio,
+      dateFrom: period.from,
+      dateTo: period.to,
+      text: undefined,
+    });
+    const total = Number(tipo === "despesa" ? resumo.despesas ?? 0 : resumo.receitas ?? 0);
+    const meioTexto = requestedMeio ? ` por ${meioLabel(requestedMeio)}` : "";
+    const texto = normalizeText(prompt);
+    const hasContextText = /(ivaipora|ivaiporã|mercado)/.test(texto);
+    const contextResults =
+      hasContextText
+        ? await searchLancamentos({
+            gestaoId,
+            tipo,
+            meio: requestedMeio,
+            dateFrom: period.from,
+            dateTo: period.to,
+            text: /ivaipor/.test(texto) ? "Ivaipor" : /mercado/.test(texto) ? "Mercado" : undefined,
+          })
+        : results;
+    const contextTotal = hasContextText
+      ? contextResults.reduce((sum, item) => sum + Number(item.valor_total), 0)
+      : total;
+    const subject =
+      hasContextText && /ivaipor/.test(texto)
+        ? "no Ivaipora"
+        : hasContextText && /mercado/.test(texto)
+          ? "com mercado"
+          : tipo === "despesa"
+            ? "em gastos"
+            : "em receitas";
+
+    const fallback =
+      contextResults.length > 0
+        ? `Vocês tiveram ${money(contextTotal)} ${subject}${meioTexto} ${periodLabel(prompt)}.`
+        : `Nao encontrei ${tipo === "despesa" ? "despesas" : "receitas"}${meioTexto} ${periodLabel(prompt)}.`;
+    const narrated = await narrate({
+      fallback,
+      style: contextResults.length > 0 ? "result" : "not_found",
+      facts: [
+        `Periodo consultado: ${period.from} ate ${period.to}.`,
+        `Total encontrado: ${money(contextTotal)}.`,
+        requestedMeio ? `Meio filtrado: ${meioLabel(requestedMeio)}.` : "",
+      ].filter(Boolean),
+      baseProvider: "local",
+    });
+
+    return NextResponse.json({
+      kind: "search",
+      provider: narrated.provider,
+      answer: narrated.answer,
+      results: contextResults,
     });
   }
 
@@ -1196,34 +1447,143 @@ ${prompt}`
     });
   }
 
-  if (looksLikeIncomePercentageQuestion(prompt)) {
+  if (looksLikePercentageQuestion(prompt)) {
     const period = detectPeriodFilter(prompt) ?? monthBounds(0);
+    const label = resolvePeriodLabel(prompt, "this_month");
+    const tipo = inferAnalyticalTipo(prompt) ?? "receita";
+    const percentual = extractRequestedPercentage(prompt) ?? 10;
     const resumo = await summarizeLancamentos({
       gestaoId,
-      tipo: "receita",
+      tipo,
       dateFrom: period.from,
       dateTo: period.to,
     });
-    const receitas = Number(resumo.receitas ?? 0);
-    const dezPorCento = receitas * 0.1;
+    const total = Number(tipo === "despesa" ? resumo.despesas ?? 0 : resumo.receitas ?? 0);
+    const resultado = total * (percentual / 100);
     const results = await searchLancamentos({
       gestaoId,
-      tipo: "receita",
+      tipo,
       dateFrom: period.from,
       dateTo: period.to,
+    });
+    const sujeito = tipo === "despesa" ? "gastos" : "ganhos";
+
+    const fallback =
+      results.length > 0
+        ? `Vocês tiveram ${money(total)} em ${sujeito} ${label}. ${percentual}% disso é ${money(resultado)}.`
+        : `Nao encontrei ${tipo === "despesa" ? "despesas" : "receitas"} ${label} para calcular esse percentual.`;
+    const narrated = await narrate({
+      fallback,
+      style: results.length > 0 ? "result" : "not_found",
+      facts: [
+        `Periodo consultado: ${period.from} ate ${period.to}.`,
+        `Base considerada: ${money(total)} em ${sujeito}.`,
+        `${percentual}% do total: ${money(resultado)}.`,
+      ],
+      baseProvider: "local",
+    });
+
+    return NextResponse.json({
+      kind: "search",
+      provider: narrated.provider,
+      answer: narrated.answer,
+      results,
+    });
+  }
+
+  if (looksLikeAverageQuestion(prompt)) {
+    const period = detectPeriodFilter(prompt) ?? monthBounds(0);
+    const label = resolvePeriodLabel(prompt, "this_month");
+    const tipo = inferAnalyticalTipo(prompt) ?? "receita";
+    const totalRow = await sumLancamentos({
+      gestaoId,
+      tipo,
+      dateFrom: period.from,
+      dateTo: period.to,
+    });
+    const total = Number(totalRow.total ?? 0);
+    const quantidade = Number(totalRow.quantidade ?? 0);
+    const dias = daysBetweenInclusive(period.from, period.to);
+    const mediaPorLancamento = quantidade > 0 ? total / quantidade : 0;
+    const mediaPorDia = dias > 0 ? total / dias : 0;
+    const results = await searchLancamentos({
+      gestaoId,
+      tipo,
+      dateFrom: period.from,
+      dateTo: period.to,
+    });
+    const sujeito = tipo === "despesa" ? "gastos" : "ganhos";
+
+    const fallback =
+      quantidade > 0
+        ? `Vocês somaram ${money(total)} em ${sujeito} ${label}. Isso dá media de ${money(mediaPorLancamento)} por lancamento e ${money(mediaPorDia)} por dia.`
+        : `Nao encontrei ${tipo === "despesa" ? "despesas" : "receitas"} ${label} para calcular media.`;
+    const narrated = await narrate({
+      fallback,
+      style: quantidade > 0 ? "result" : "not_found",
+      facts: [
+        `Periodo consultado: ${period.from} ate ${period.to}.`,
+        `Quantidade de lancamentos: ${quantidade}.`,
+        `Media por lancamento: ${money(mediaPorLancamento)}.`,
+        `Media por dia: ${money(mediaPorDia)}.`,
+      ],
+      baseProvider: "local",
+    });
+
+    return NextResponse.json({
+      kind: "search",
+      provider: narrated.provider,
+      answer: narrated.answer,
+      results,
+    });
+  }
+
+  if (looksLikeProjectionQuestion(prompt)) {
+    const normalizedPrompt = normalizeText(prompt);
+    const projectionTimeframe =
+      /(semana|semanal|semanais|semanis)/.test(normalizedPrompt) ? "this_week" : "this_month";
+    const period =
+      detectPeriodFilter(prompt) ?? (projectionTimeframe === "this_week" ? weekBounds(0) : monthBounds(0));
+    const label = resolvePeriodLabel(prompt, projectionTimeframe);
+    const summary = await summarizeLancamentos({
+      gestaoId,
+      dateFrom: period.from,
+      dateTo: period.to,
+    });
+    const today = formatDate(new Date());
+    const currentEnd = minDateString(period.to, today);
+    const elapsedDays = daysBetweenInclusive(period.from, currentEnd);
+    const totalDays = daysBetweenInclusive(period.from, period.to);
+    const currentReceitas = Number(summary.receitas ?? 0);
+    const currentDespesas = Number(summary.despesas ?? 0);
+    const currentSaldo = Number(summary.saldo ?? 0);
+    const projectedReceitas = currentReceitas * (totalDays / elapsedDays);
+    const projectedDespesas = currentDespesas * (totalDays / elapsedDays);
+    const projectedSaldo = currentSaldo * (totalDays / elapsedDays);
+    const metric = inferProjectionMetric(prompt);
+    const results = await searchLancamentos({
+      gestaoId,
+      dateFrom: period.from,
+      dateTo: currentEnd,
     });
 
     const fallback =
-      resumo.quantidade > 0
-        ? `Você ganhou ${money(receitas)} ${periodLabel(prompt)}. 10% disso é ${money(dezPorCento)}.`
-        : `Nao encontrei receitas ${periodLabel(prompt)} para calcular 10%.`;
+      results.length === 0
+        ? `Ainda nao encontrei lancamentos suficientes ${label} para projetar um cenario.`
+        : metric === "despesa"
+          ? `Mantendo o ritmo atual, vocês podem fechar ${label} com cerca de ${money(projectedDespesas)} em despesas. Ate agora foram ${money(currentDespesas)}, com media de ${money(currentDespesas / elapsedDays)} por dia.`
+          : metric === "saldo"
+            ? `Mantendo o ritmo atual, o saldo projetado ${label} fica em torno de ${money(projectedSaldo)}. Ate agora o saldo do periodo esta em ${money(currentSaldo)}.`
+            : `Mantendo o ritmo atual, vocês podem fechar ${label} com cerca de ${money(projectedReceitas)} em entradas. Ate agora entraram ${money(currentReceitas)}, com media de ${money(currentReceitas / elapsedDays)} por dia.`;
     const narrated = await narrate({
       fallback,
-      style: resumo.quantidade > 0 ? "result" : "not_found",
+      style: results.length > 0 ? "result" : "not_found",
       facts: [
         `Periodo consultado: ${period.from} ate ${period.to}.`,
-        `Receitas consideradas: ${money(receitas)}.`,
-        `10% das receitas: ${money(dezPorCento)}.`,
+        `Dias decorridos considerados: ${elapsedDays} de ${totalDays}.`,
+        `Receitas atuais: ${money(currentReceitas)}.`,
+        `Despesas atuais: ${money(currentDespesas)}.`,
+        `Saldo atual do periodo: ${money(currentSaldo)}.`,
       ],
       baseProvider: "local",
     });
@@ -1782,28 +2142,101 @@ ${prompt}`
       });
     }
 
-    if (semanticInsight.plan.action === "income_percentage") {
+    if (semanticInsight.plan.action === "percentage" || semanticInsight.plan.action === "income_percentage") {
+      const tipo = semanticInsight.plan.tipo === "despesa" ? "despesa" : "receita";
+      const label = resolvePeriodLabel(prompt, semanticInsight.plan.timeframe);
       const resumo = await summarizeLancamentos({
         gestaoId,
         ...insightFilters,
-        tipo: "receita",
+        tipo,
       });
-      const receitas = Number(resumo.receitas ?? 0);
-      const percentual = Number(semanticInsight.plan.percentage ?? 10);
-      const resultado = receitas * (percentual / 100);
+      const total = Number(tipo === "despesa" ? resumo.despesas ?? 0 : resumo.receitas ?? 0);
+      const percentual = Number(semanticInsight.plan.percentage ?? extractRequestedPercentage(prompt) ?? 10);
+      const resultado = total * (percentual / 100);
       const results = await searchLancamentos({
         gestaoId,
         ...insightFilters,
-        tipo: "receita",
+        tipo,
       });
 
       return NextResponse.json({
         kind: "search",
         provider: semanticInsight.provider,
         answer:
-          resumo.quantidade > 0
-            ? `Vocês tiveram ${money(receitas)} em receitas ${periodLabel(prompt)}. ${percentual}% disso é ${money(resultado)}.`
-            : `Nao encontrei receitas ${periodLabel(prompt)} para calcular esse percentual.`,
+          results.length > 0
+            ? `Vocês tiveram ${money(total)} em ${tipo === "despesa" ? "gastos" : "receitas"} ${label}. ${percentual}% disso é ${money(resultado)}.`
+            : `Nao encontrei ${tipo === "despesa" ? "despesas" : "receitas"} ${label} para calcular esse percentual.`,
+        results,
+      });
+    }
+
+    if (semanticInsight.plan.action === "average") {
+      const tipo = semanticInsight.plan.tipo === "despesa" ? "despesa" : "receita";
+      const label = resolvePeriodLabel(prompt, semanticInsight.plan.timeframe);
+      const totalRow = await sumLancamentos({
+        gestaoId,
+        ...insightFilters,
+        tipo,
+      });
+      const total = Number(totalRow.total ?? 0);
+      const quantidade = Number(totalRow.quantidade ?? 0);
+      const periodo = applyInsightTimeframeFilters(prompt, { motivo: "periodo" }, semanticInsight.plan.timeframe);
+      const from = periodo.dateFrom ?? formatDate(new Date());
+      const to = periodo.dateTo ?? formatDate(new Date());
+      const dias = daysBetweenInclusive(from, to);
+      const mediaPorLancamento = quantidade > 0 ? total / quantidade : 0;
+      const mediaPorDia = dias > 0 ? total / dias : 0;
+      const results = await searchLancamentos({
+        gestaoId,
+        ...insightFilters,
+        tipo,
+      });
+
+      return NextResponse.json({
+        kind: "search",
+        provider: semanticInsight.provider,
+        answer:
+          quantidade > 0
+            ? `Vocês somaram ${money(total)} em ${tipo === "despesa" ? "despesas" : "receitas"} ${label}. A media foi ${money(mediaPorLancamento)} por lancamento e ${money(mediaPorDia)} por dia.`
+            : `Nao encontrei ${tipo === "despesa" ? "despesas" : "receitas"} ${label} para calcular media.`,
+        results,
+      });
+    }
+
+    if (semanticInsight.plan.action === "projection") {
+      const label = resolvePeriodLabel(prompt, semanticInsight.plan.timeframe);
+      const periodo = applyInsightTimeframeFilters(prompt, { motivo: "periodo" }, semanticInsight.plan.timeframe);
+      const from = periodo.dateFrom ?? formatDate(new Date());
+      const to = periodo.dateTo ?? formatDate(new Date());
+      const currentEnd = minDateString(to, formatDate(new Date()));
+      const elapsedDays = daysBetweenInclusive(from, currentEnd);
+      const totalDays = daysBetweenInclusive(from, to);
+      const summary = await summarizeLancamentos({
+        gestaoId,
+        dateFrom: from,
+        dateTo: to,
+      });
+      const currentReceitas = Number(summary.receitas ?? 0);
+      const currentDespesas = Number(summary.despesas ?? 0);
+      const currentSaldo = Number(summary.saldo ?? 0);
+      const metric = inferProjectionMetric(prompt);
+      const results = await searchLancamentos({
+        gestaoId,
+        dateFrom: from,
+        dateTo: currentEnd,
+      });
+
+      return NextResponse.json({
+        kind: "search",
+        provider: semanticInsight.provider,
+        answer:
+          results.length === 0
+            ? `Ainda nao encontrei lancamentos suficientes ${label} para projetar um cenario.`
+            : metric === "despesa"
+              ? `Mantendo o ritmo atual, vocês podem fechar ${label} com cerca de ${money(currentDespesas * (totalDays / elapsedDays))} em despesas.`
+              : metric === "saldo"
+                ? `Mantendo o ritmo atual, o saldo projetado ${label} fica em torno de ${money(currentSaldo * (totalDays / elapsedDays))}.`
+                : `Mantendo o ritmo atual, vocês podem fechar ${label} com cerca de ${money(currentReceitas * (totalDays / elapsedDays))} em entradas.`,
         results,
       });
     }
@@ -1925,7 +2358,11 @@ ${prompt}`
       plan,
       answer:
         resumo.quantidade > 0
-          ? `Resumo do periodo: ${resumo.quantidade} lancamento(s), ${money(resumo.receitas)} em receitas, ${money(resumo.despesas)} em despesas e saldo de ${money(resumo.saldo)}.`
+          ? plan.filters.tipo === "despesa"
+            ? `Vocês tiveram ${money(resumo.despesas)} em despesas ${plan.filters.dateFrom && plan.filters.dateTo ? `entre ${plan.filters.dateFrom} e ${plan.filters.dateTo}` : "no contexto pedido"}.`
+            : plan.filters.tipo === "receita"
+              ? `Vocês tiveram ${money(resumo.receitas)} em receitas ${plan.filters.dateFrom && plan.filters.dateTo ? `entre ${plan.filters.dateFrom} e ${plan.filters.dateTo}` : "no contexto pedido"}.`
+              : `Resumo do periodo: ${resumo.quantidade} lancamento(s), ${money(resumo.receitas)} em receitas, ${money(resumo.despesas)} em despesas e saldo de ${money(resumo.saldo)}.`
           : "Nao encontrei lancamentos para resumir nesse contexto.",
       results,
     });

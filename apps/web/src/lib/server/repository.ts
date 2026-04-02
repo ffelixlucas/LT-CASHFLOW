@@ -52,6 +52,7 @@ export type SearchLancamentosInput = {
   gestaoId: number;
   text?: string;
   tipo?: "receita" | "despesa" | "ajuste";
+  meio?: "pix" | "debito" | "credito" | "dinheiro" | "boleto" | "ted_doc" | "transferencia" | "outro";
   contaId?: number;
   categoriaId?: number;
   minValor?: number;
@@ -732,6 +733,11 @@ function buildLancamentoFilters(filters: SearchLancamentosInput): SqlFilters {
   if (filters.tipo) {
     conditions.push("l.tipo = ?");
     params.push(filters.tipo);
+  }
+
+  if (filters.meio) {
+    conditions.push("l.meio = ?");
+    params.push(filters.meio);
   }
 
   if (filters.contaId) {

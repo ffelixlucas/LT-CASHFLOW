@@ -103,6 +103,21 @@ Cada comando deve ser lido assim:
   resultado esperado: total de receitas e o valor correspondente a 10%
   status: obrigatorio na IA
 
+- comando: `quanto e 10% dos meus ganhos semanais?`
+  intencao: calcular percentual sobre ganhos da semana atual, mesmo com linguagem coloquial
+  resultado esperado: informar o total de ganhos da semana e o valor correspondente ao percentual pedido
+  status: obrigatorio na IA
+
+- comando: `qual a media dos meus ganhos esta semana?`
+  intencao: calcular media dos ganhos do periodo
+  resultado esperado: informar total, media por lancamento e media por dia
+  status: obrigatorio na IA
+
+- comando: `se continuarmos nesse ritmo, com quanto fechamos este mes?`
+  intencao: projetar fechamento do periodo mantendo o ritmo atual
+  resultado esperado: informar valor atual, media diaria e projecao de fechamento
+  status: obrigatorio na IA
+
 ## 2. Criacao de Lancamentos
 
 ### 2.1 Lancamento simples
