@@ -7,7 +7,7 @@ import CredentialsProvider from "next-auth/providers/credentials";
 
 import { signInSchema } from "@ltcashflow/validation";
 
-import { findUserByEmail } from "./repository";
+import { findUserByEmail, findUserById } from "./repository";
 
 export const authOptions: NextAuthOptions = {
   session: {
@@ -79,9 +79,15 @@ export async function requireUser() {
     return null;
   }
 
+  const user = await findUserById(Number(session.user.id));
+
+  if (!user) {
+    return null;
+  }
+
   return {
-    id: Number(session.user.id),
-    nome: session.user.name ?? "Usuario",
-    email: session.user.email ?? "",
+    id: user.id,
+    nome: user.nome,
+    email: user.email,
   };
 }

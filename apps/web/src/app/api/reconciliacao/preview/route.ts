@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { normalizeDateInput } from "@/lib/date";
 import { auth } from "@/lib/server/auth";
 import { listCategorias, listContas, listLancamentosForContaRange, userHasGestaoAccess } from "@/lib/server/repository";
-import { buildStatementPreview, parseStatementText } from "@/lib/server/statement-reconciliation";
+import { buildStatementPreview, parseOfxText, parseStatementText } from "@/lib/server/statement-reconciliation";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -51,12 +51,22 @@ export async function POST(request: Request) {
   }
 
   const categorias = await listCategorias(gestaoId);
-  const parsed = parseStatementText({
-    text,
-    contaId,
-    categories: categorias,
-    fallbackDate,
-  });
+  const contas = await listContas(gestaoId);
+  const isOfx = /<OFX>|<STMTTRN>|<BANKTRANLIST>/i.test(text);
+  const parsed = isOfx
+    ? parseOfxText({
+        text,
+        contaId,
+        categories: categorias,
+        contas,
+      })
+    : parseStatementText({
+        text,
+        contaId,
+        categories: categorias,
+        contas,
+        fallbackDate,
+      });
 
   if (parsed.items.length === 0) {
     return NextResponse.json(

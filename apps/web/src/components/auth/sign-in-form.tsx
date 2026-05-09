@@ -4,6 +4,8 @@ import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { PasswordField } from "./password-field";
+
 export function SignInForm() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -46,19 +48,7 @@ export function SignInForm() {
         />
       </div>
 
-      <div className="space-y-2">
-        <label className="text-sm font-medium" htmlFor="password">
-          Senha
-        </label>
-        <input
-          className="w-full rounded-2xl border border-line bg-background px-4 py-3 outline-none"
-          id="password"
-          name="password"
-          type="password"
-          placeholder="Sua senha"
-          required
-        />
-      </div>
+      <PasswordField id="password" name="password" label="Senha" placeholder="Sua senha" required />
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
 

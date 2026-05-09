@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS contas (
   instituicao VARCHAR(120) NULL,
   tipo ENUM('carteira', 'corrente', 'poupanca', 'cartao_credito', 'investimento', 'caixa', 'outro') NOT NULL DEFAULT 'corrente',
   saldo_inicial DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  saldo_inicial_em DATETIME NULL,
   limite_credito DECIMAL(14,2) NULL,
   fechamento_dia TINYINT UNSIGNED NULL,
   vencimento_dia TINYINT UNSIGNED NULL,

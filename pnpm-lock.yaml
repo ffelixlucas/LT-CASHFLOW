@@ -13,6 +13,9 @@ importers:
       '@ltcashflow/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@ltcashflow/finance-core':
+        specifier: workspace:*
+        version: link:../../packages/finance-core
       '@ltcashflow/validation':
         specifier: workspace:*
         version: link:../../packages/validation
@@ -84,6 +87,12 @@ importers:
       drizzle-kit:
         specifier: ^0.31.7
         version: 0.31.10
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  packages/finance-core:
+    devDependencies:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

@@ -3,7 +3,8 @@ import { NextResponse } from "next/server";
 import { deleteLancamentosSuggestionSchema } from "@ltcashflow/validation";
 
 import { auth } from "@/lib/server/auth";
-import { deleteLancamentos, userHasGestaoAccess } from "@/lib/server/repository";
+import { userCanMutateGestao } from "@/lib/server/permissions";
+import { deleteLancamentos } from "@/lib/server/repository";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -20,7 +21,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Gestao obrigatoria." }, { status: 400 });
   }
 
-  if (!(await userHasGestaoAccess(userId, gestaoId))) {
+  if (!(await userCanMutateGestao(userId, gestaoId))) {
     return NextResponse.json({ error: "Sem acesso a essa gestao." }, { status: 403 });
   }
 

@@ -7,3 +7,10 @@ export const createGestaoSchema = z.object({
 });
 
 export type CreateGestaoInput = z.infer<typeof createGestaoSchema>;
+
+export const updateGestaoMemberRoleSchema = z.object({
+  memberUserId: z.coerce.number().int().positive(),
+  papel: z.enum(["proprietario", "administrador", "editor", "visualizador"]),
+});
+
+export type UpdateGestaoMemberRoleInput = z.infer<typeof updateGestaoMemberRoleSchema>;

@@ -1,5 +1,6 @@
 import "server-only";
 
+import { isMercadoLivreMarketplaceCharge, matchesGroceryAlimentacaoCue } from "@/lib/merchant-cues";
 import {
   assistantInsightPlanSchema,
   aiSearchFilterSchema,
@@ -181,11 +182,15 @@ function shouldDefaultToCurrentTime(prompt: string) {
   );
 }
 
-function detectTipo(prompt: string): "receita" | "despesa" | "ajuste" {
+function detectTipo(prompt: string): "receita" | "despesa" | "ajuste" | "transferencia" {
   const normalized = normalizeText(prompt);
 
   if (/(salario|recebi|recebimento|ganhei|entrada|pix recebido|deposito)/.test(normalized)) {
     return "receita";
+  }
+
+  if (/(aplicacao|aplicação|resgate|transferencia|transferência|investimento|porquinho)/.test(normalized)) {
+    return "transferencia";
   }
 
   if (/(ajuste|correcao)/.test(normalized)) {
@@ -195,7 +200,9 @@ function detectTipo(prompt: string): "receita" | "despesa" | "ajuste" {
   return "despesa";
 }
 
-function detectExplicitTipo(prompt: string): "receita" | "despesa" | "ajuste" | undefined {
+function detectExplicitTipo(
+  prompt: string,
+): "receita" | "despesa" | "ajuste" | "transferencia" | undefined {
   const normalized = normalizeText(prompt);
 
   if (/(salario|recebi|recebimento|ganhei|entrada|pix recebido|deposito)/.test(normalized)) {
@@ -204,6 +211,10 @@ function detectExplicitTipo(prompt: string): "receita" | "despesa" | "ajuste" | 
 
   if (/(ajuste|correcao)/.test(normalized)) {
     return "ajuste";
+  }
+
+  if (/(aplicacao|aplicação|resgate|transferencia|transferência|investimento|porquinho)/.test(normalized)) {
+    return "transferencia";
   }
 
   if (/(despesa|gastei|paguei|compra|saida|saída)/.test(normalized)) {
@@ -230,10 +241,6 @@ function detectMeio(prompt: string) {
 
   if (/(dinheiro|especie|espécie)/.test(normalized)) {
     return "dinheiro" as const;
-  }
-
-  if (/(boleto)/.test(normalized)) {
-    return "boleto" as const;
   }
 
   if (/(ted|doc)/.test(normalized)) {
@@ -302,8 +309,15 @@ function keywordCategoria(prompt: string, categories: CategoriaOption[], tipo: s
     return byName;
   }
 
+  if (matchesGroceryAlimentacaoCue(normalized)) {
+    const match = categories.find((category) => normalizeText(category.nome) === normalizeText("Alimentacao"));
+
+    if (match) {
+      return match;
+    }
+  }
+
   const keywordMap: Array<{ terms: RegExp; category: string }> = [
-    { terms: /(mercado|supermercado|feira|ifood|restaurante|padaria|lanche)/, category: "Alimentacao" },
     { terms: /(uber|99|combustivel|gasolina|onibus|metro|transporte)/, category: "Transporte" },
     { terms: /(farmacia|medico|consulta|saude)/, category: "Saude" },
     { terms: /(aluguel|condominio|luz|agua|internet|moradia)/, category: "Moradia" },
@@ -357,8 +371,11 @@ function findMentionedCategoria(prompt: string, categories: CategoriaOption[]) {
     return byFuzzyName;
   }
 
+  if (matchesGroceryAlimentacaoCue(normalized)) {
+    return categories.find((category) => normalizeText(category.nome) === normalizeText("Alimentacao")) ?? null;
+  }
+
   const keywordMap: Array<{ terms: RegExp; category: string }> = [
-    { terms: /(mercado|supermercado|feira|ifood|restaurante|padaria|lanche)/, category: "Alimentacao" },
     { terms: /(uber|99|combustivel|gasolina|onibus|metro|transporte)/, category: "Transporte" },
     { terms: /(farmacia|medico|consulta|saude)/, category: "Saude" },
     { terms: /(aluguel|condominio|luz|agua|internet|moradia)/, category: "Moradia" },
@@ -412,7 +429,7 @@ function promptToDescription(prompt: string) {
 
 function defaultDescriptionForPrompt(
   prompt: string,
-  tipo: "receita" | "despesa" | "ajuste",
+  tipo: "receita" | "despesa" | "ajuste" | "transferencia",
   meio?: QuickAddSuggestion["meio"],
 ) {
   const normalized = normalizeText(prompt);
@@ -421,8 +438,20 @@ function defaultDescriptionForPrompt(
     return "Entrada de Pix";
   }
 
+  if (tipo === "transferencia") {
+    if (/(resgate)/.test(normalized)) {
+      return "Resgate de investimento";
+    }
+
+    return "Aplicacao financeira";
+  }
+
   if (/(onibus|ônibus|transp|transporte)/.test(normalized)) {
     return "Onibus transporte coletivo";
+  }
+
+  if (isMercadoLivreMarketplaceCharge(normalized)) {
+    return "Mercado Livre";
   }
 
   if (/(superdia|mercado|supermercado|feira|padaria|ifood|restaurante)/.test(normalized)) {
@@ -964,7 +993,7 @@ function findQuickAddConta(prompt: string, contas: SelectOption[]) {
 function findPreferredContaByFlow(
   prompt: string,
   contas: SelectOption[],
-  tipo: "receita" | "despesa" | "ajuste",
+  tipo: "receita" | "despesa" | "ajuste" | "transferencia",
   meio?: QuickAddSuggestion["meio"],
 ) {
   const normalized = normalizeText(prompt);
@@ -993,6 +1022,24 @@ function findPreferredContaByFlow(
   return null;
 }
 
+function findPreferredTransferDestination(prompt: string, contas: SelectOption[], sourceContaId?: number) {
+  const normalized = normalizeText(prompt);
+  const candidates = contas.filter(
+    (item) => item.id !== sourceContaId && (item.tipo === "poupanca" || item.tipo === "investimento"),
+  );
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  return (
+    candidates.find((item) => /porq|reserva|invest|cdb/.test(normalizeText(item.nome))) ??
+    candidates.find((item) => normalized.includes(normalizeText(item.nome).slice(0, 8))) ??
+    candidates[0] ??
+    null
+  );
+}
+
 function applyQuickAddPromptOverrides(
   prompt: string,
   suggestion: QuickAddSuggestion,
@@ -1007,6 +1054,10 @@ function applyQuickAddPromptOverrides(
   const explicitCategoria = findMentionedCategoria(prompt, categorias);
   const explicitConta = findQuickAddConta(prompt, contas);
   const preferredConta = explicitConta ?? findPreferredContaByFlow(prompt, contas, detectedTipo, detectedMeio);
+  const preferredTransferDestination =
+    detectedTipo === "transferencia"
+      ? findPreferredTransferDestination(prompt, contas, preferredConta?.id)
+      : null;
   const amount = extractAmount(prompt);
 
   next.tipo = detectedTipo;
@@ -1024,7 +1075,12 @@ function applyQuickAddPromptOverrides(
     next.contaId = preferredConta.id;
   }
 
-  if (explicitCategoria) {
+  if (detectedTipo === "transferencia") {
+    if (preferredTransferDestination) {
+      next.contaDestinoId = preferredTransferDestination.id;
+    }
+    next.categoriaId = undefined;
+  } else if (explicitCategoria) {
     next.categoriaId = explicitCategoria.id;
   } else {
     const inferredCategoria =
@@ -1680,7 +1736,7 @@ descricao, tipo, status, meio, valorTotal, competenciaData, competenciaHora, ven
 Valores aceitos:
 - tipo: receita, despesa ou ajuste
 - status: previsto, pendente ou liquidado
- - meio: pix, debito, credito, dinheiro, boleto, ted_doc, transferencia ou outro
+- meio: pix, debito, credito, dinheiro, ted_doc, transferencia ou outro
 Use apenas ids de conta e categoria fornecidos no contexto.
 Contexto contas: ${JSON.stringify(contas)}
 Contexto categorias: ${JSON.stringify(categorias)}`;

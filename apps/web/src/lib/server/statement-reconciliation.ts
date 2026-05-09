@@ -1,11 +1,18 @@
 import "server-only";
 
 import type { QuickAddSuggestion } from "@ltcashflow/validation";
+import { isMercadoLivreMarketplaceCharge } from "@/lib/merchant-cues";
 
 type CategoriaOption = {
   id: number;
   nome: string;
   natureza?: "receita" | "despesa" | "ambos";
+};
+
+type ContaOption = {
+  id: number;
+  nome: string;
+  tipo?: string;
 };
 
 type LancamentoLike = {
@@ -129,9 +136,12 @@ function pickStatementCategory(
     );
   }
 
+  if (normalizedLabel.includes("aplicacao") || normalizedLabel.includes("resgate")) {
+    return null;
+  }
+
   if (
     normalizedLabel.includes("pix recebido devolvido") ||
-    normalizedLabel.includes("aplicacao") ||
     normalizedLabel.includes("pagamento efetuado") ||
     normalizedLabel.includes("pix enviado") ||
     normalizedLabel.includes("transferencia")
@@ -155,7 +165,10 @@ function pickStatementCategory(
       );
     }
 
-    if (/(superdia|mercado|supermercado|feira|padaria)/.test(normalizedDetail)) {
+    if (
+      !isMercadoLivreMarketplaceCharge(normalizedDetail) &&
+      /(superdia|mercado|supermercado|feira|padaria)/.test(normalizedDetail)
+    ) {
       return (
         findCategoryByName(categories, ["Alimentacao"], "despesa") ??
         findCategoryByName(categories, ["Outros"], "despesa") ??
@@ -202,6 +215,10 @@ function describeStatementLine(label: string, detail: string, direction: "in" | 
       return "Super Dia";
     }
 
+    if (isMercadoLivreMarketplaceCharge(normalizedDetail)) {
+      return "Mercado Livre";
+    }
+
     if (/(mercado|supermercado|feira|padaria)/.test(normalizedDetail)) {
       return "Mercado";
     }
@@ -246,9 +263,17 @@ function classifyStatementLine(
 
   if (normalizedLabel.includes("aplicacao")) {
     return {
-      tipo: "despesa",
+      tipo: "transferencia",
       meio: "transferencia",
-      rationale: "Aplicacao financeira classificada como saida da conta.",
+      rationale: "Aplicacao financeira classificada como transferencia para investimento.",
+    };
+  }
+
+  if (normalizedLabel.includes("resgate")) {
+    return {
+      tipo: "transferencia",
+      meio: "transferencia",
+      rationale: "Resgate de investimento classificado como transferencia de retorno.",
     };
   }
 
@@ -300,10 +325,35 @@ function parseTransactionLine(line: string, currentDate: string) {
   };
 }
 
+function pickTransferDestinationAccount(
+  contas: ContaOption[],
+  sourceContaId: number,
+  label: string,
+  detail: string,
+) {
+  const normalized = normalizeText(`${label} ${detail}`);
+  const candidates = contas.filter(
+    (conta) => conta.id !== sourceContaId && (conta.tipo === "poupanca" || conta.tipo === "investimento"),
+  );
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const keywordMatch =
+    candidates.find((conta) => /porq|reserva|invest|cdb/.test(normalizeText(conta.nome))) ??
+    candidates.find((conta) => normalized.includes(normalizeText(conta.nome).slice(0, 8))) ??
+    candidates[0] ??
+    null;
+
+  return keywordMatch;
+}
+
 export function parseStatementText(input: {
   text: string;
   contaId: number;
   categories: CategoriaOption[];
+  contas: ContaOption[];
   fallbackDate?: string;
 }) {
   const lines = input.text
@@ -354,12 +404,20 @@ export function parseStatementText(input: {
     }
 
     const classification = classifyStatementLine(parsed.label, parsed.detail, parsed.direction);
-    const category = pickStatementCategory(parsed.label, parsed.detail, parsed.direction, input.categories);
+    const category =
+      classification.tipo === "transferencia"
+        ? null
+        : pickStatementCategory(parsed.label, parsed.detail, parsed.direction, input.categories);
 
-    if (!category) {
+    if (!category && classification.tipo !== "transferencia") {
       ignoredCount += 1;
       continue;
     }
+
+    const contaDestino =
+      classification.tipo === "transferencia"
+        ? pickTransferDestinationAccount(input.contas, input.contaId, parsed.label, parsed.detail)
+        : null;
 
     order += 1;
 
@@ -379,11 +437,111 @@ export function parseStatementText(input: {
         valorTotal: parsed.amount,
         competenciaData: parsed.date,
         contaId: input.contaId,
-        categoriaId: category.id,
+        categoriaId: category?.id,
+        contaDestinoId: contaDestino?.id,
         confianca: 0.88,
         motivo: classification.rationale,
       },
       rationale: classification.rationale,
+    });
+  }
+
+  return { items, ignoredCount };
+}
+
+function readOfxField(block: string, tag: string) {
+  const regex = new RegExp(`<${tag}>([^<\\r\\n]+)`, "i");
+  const match = block.match(regex);
+  return match?.[1]?.trim() ?? null;
+}
+
+function parseOfxDate(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.replace(/\D/g, "");
+  if (normalized.length < 8) {
+    return null;
+  }
+
+  const year = normalized.slice(0, 4);
+  const month = normalized.slice(4, 6);
+  const day = normalized.slice(6, 8);
+  return `${year}-${month}-${day}`;
+}
+
+export function parseOfxText(input: {
+  text: string;
+  contaId: number;
+  categories: CategoriaOption[];
+  contas: ContaOption[];
+}) {
+  const content = input.text;
+  const blocks = content.match(/<STMTTRN>[\s\S]*?(?=<STMTTRN>|<\/BANKTRANLIST>|$)/gi) ?? [];
+  const items: ParsedStatementItem[] = [];
+  let ignoredCount = 0;
+  let order = 0;
+
+  for (const block of blocks) {
+    const trnType = normalizeText(readOfxField(block, "TRNTYPE") ?? "");
+    const dtPosted = parseOfxDate(readOfxField(block, "DTPOSTED"));
+    const name = readOfxField(block, "NAME") ?? "Movimentacao OFX";
+    const memo = readOfxField(block, "MEMO") ?? "";
+    const fitId = readOfxField(block, "FITID") ?? `${order + 1}`;
+    const amountRaw = readOfxField(block, "TRNAMT");
+    const amountValue = Number(amountRaw?.replace(",", ".") ?? NaN);
+
+    if (!dtPosted || !Number.isFinite(amountValue) || amountValue === 0) {
+      ignoredCount += 1;
+      continue;
+    }
+
+    const direction = amountValue > 0 ? ("in" as const) : ("out" as const);
+    const amount = Math.abs(amountValue);
+    const label = name;
+    const detail = memo || trnType || "ofx";
+    const classification = classifyStatementLine(label, detail, direction);
+    const category =
+      classification.tipo === "transferencia"
+        ? null
+        : pickStatementCategory(label, detail, direction, input.categories);
+
+    if (!category && classification.tipo !== "transferencia") {
+      ignoredCount += 1;
+      continue;
+    }
+
+    const contaDestino =
+      classification.tipo === "transferencia"
+        ? pickTransferDestinationAccount(input.contas, input.contaId, label, detail)
+        : null;
+
+    order += 1;
+    const rationale = `Linha OFX (${trnType || "movimento"}) interpretada automaticamente para conciliacao.`;
+
+    items.push({
+      id: `${dtPosted}-${fitId}-${order}`,
+      date: dtPosted,
+      label,
+      detail,
+      direction,
+      amount,
+      balanceAfter: null,
+      draft: {
+        descricao: describeStatementLine(label, detail, direction),
+        tipo: classification.tipo,
+        status: "liquidado",
+        meio: classification.meio,
+        valorTotal: amount,
+        competenciaData: dtPosted,
+        contaId: input.contaId,
+        categoriaId: category?.id,
+        contaDestinoId: contaDestino?.id,
+        confianca: 0.9,
+        motivo: rationale,
+      },
+      rationale,
     });
   }
 

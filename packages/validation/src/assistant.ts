@@ -4,7 +4,7 @@ import { lancamentoMeioSchema } from "./financeiro";
 
 export const quickAddSuggestionSchema = z.object({
   descricao: z.string().min(2),
-  tipo: z.enum(["receita", "despesa", "ajuste"]),
+  tipo: z.enum(["receita", "despesa", "ajuste", "transferencia"]),
   status: z.enum(["previsto", "pendente", "liquidado"]).default("liquidado"),
   meio: lancamentoMeioSchema.optional(),
   valorTotal: z.number().positive(),
@@ -15,9 +15,26 @@ export const quickAddSuggestionSchema = z.object({
     .optional(),
   vencimentoData: z.string().optional(),
   contaId: z.number().int().positive(),
-  categoriaId: z.number().int().positive(),
+  categoriaId: z.number().int().positive().optional(),
+  contaDestinoId: z.number().int().positive().optional(),
   confianca: z.number().min(0).max(1),
   motivo: z.string().min(2),
+}).superRefine((data, ctx) => {
+  if (data.tipo === "transferencia") {
+    if (!data.contaDestinoId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Informe a conta destino.",
+        path: ["contaDestinoId"],
+      });
+    }
+  } else if (!data.categoriaId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Informe a categoria.",
+      path: ["categoriaId"],
+    });
+  }
 });
 
 export const quickAddBatchSuggestionSchema = z.object({

@@ -3,6 +3,7 @@ import {
   bigint,
   char,
   datetime,
+  decimal,
   index,
   mysqlEnum,
   mysqlTable,
@@ -40,6 +41,10 @@ export const gestoes = mysqlTable(
     descricao: text("descricao"),
     tipo: mysqlEnum("tipo", ["pessoal", "familiar", "profissional", "projeto"])
       .default("familiar")
+      .notNull(),
+    inicioEm: datetime("inicio_em", { mode: "date" }),
+    percentualReserva: decimal("percentual_reserva", { precision: 5, scale: 2 })
+      .default("10.00")
       .notNull(),
     moedaPadrao: char("moeda_padrao", { length: 3 }).default("BRL").notNull(),
     fusoHorario: varchar("fuso_horario", { length: 60 })

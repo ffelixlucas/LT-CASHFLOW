@@ -1,17 +1,18 @@
 import Link from "next/link";
+import Image from "next/image";
 import { redirect } from "next/navigation";
 
 import { SignInForm } from "@/components/auth/sign-in-form";
-import { auth } from "@/lib/server/auth";
+import { requireUser } from "@/lib/server/auth";
 
 type EntrarPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
 export default async function EntrarPage({ searchParams }: EntrarPageProps) {
-  const session = await auth();
+  const user = await requireUser();
 
-  if (session?.user?.id) {
+  if (user) {
     redirect("/dashboard");
   }
 
@@ -19,17 +20,26 @@ export default async function EntrarPage({ searchParams }: EntrarPageProps) {
   const created = params.created === "1";
 
   return (
-    <main className="min-h-screen bg-background px-6 py-10 sm:px-10">
-      <div className="mx-auto grid max-w-5xl gap-8 lg:grid-cols-[0.9fr_1.1fr]">
-        <section className="rounded-[2rem] bg-surface-strong p-8">
-          <p className="text-xs tracking-[0.18em] uppercase text-muted">Acesso</p>
-          <h1 className="mt-4 font-heading text-4xl font-semibold">Entre para usar seu caixa compartilhado</h1>
-          <p className="mt-4 text-base leading-7 text-muted">
-            A partir daqui voce pode criar gestoes, contas, categorias e lancamentos.
-          </p>
+    <main className="min-h-screen bg-background px-4 py-6 sm:px-8 sm:py-8">
+      <div className="mx-auto grid max-w-5xl gap-6 lg:grid-cols-[0.9fr_1.1fr]">
+        <section className="hidden rounded-[2rem] bg-surface-strong p-8 lg:block">
+          <div className="flex min-h-full flex-col items-center justify-center gap-4 text-center">
+            <Image
+              alt="LT CashFlow"
+              className="h-auto w-[180px] max-w-full sm:w-[300px]"
+              height={319}
+              priority
+              sizes="(max-width: 640px) 180px, 300px"
+              src="/brand/ltcashflow-logo-horizontal-1-tight.png"
+              width={1198}
+            />
+            <p className="max-w-sm text-sm leading-6 text-muted">
+              Entre para criar gestões, contas, categorias e lançamentos.
+            </p>
+          </div>
         </section>
 
-        <section className="rounded-[2rem] border border-line bg-surface p-8">
+        <section className="rounded-[2rem] border border-line bg-surface p-5 sm:p-8">
           {created ? (
             <p className="mb-4 rounded-2xl bg-green-50 px-4 py-3 text-sm text-green-800">
               Conta criada com sucesso. Agora e so entrar.

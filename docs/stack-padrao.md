@@ -158,6 +158,7 @@ packages/
 
 docs/
   stack-padrao.md
+  modelagem/          # pacote central: produto, UX, arquitetura, dados, fluxos, ops…
 ```
 
 ### Monolito modular primeiro
@@ -341,8 +342,9 @@ Antes de propor ou aplicar mudancas, a IA deve ler:
 
 1. `AGENTS.md`
 2. `docs/stack-padrao.md`
-3. `backend/docs/modelagem-dados.md`
-4. `backend/docs/readme_observabilidade.md`
+3. `docs/modelagem/README.md` (modelagem produto/UX/dados centralizada)
+4. `backend/docs/modelagem-dados.md`
+5. `backend/docs/readme_observabilidade.md`
 
 Nenhuma IA deve:
 

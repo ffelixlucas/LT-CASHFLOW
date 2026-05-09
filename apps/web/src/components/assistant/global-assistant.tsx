@@ -37,7 +37,7 @@ declare global {
   }
 }
 
-type GestaoOption = {
+export type GestaoOption = {
   id: number;
   nome: string;
   contas: Array<{
@@ -65,7 +65,7 @@ type QuickAddSuggestion = {
   descricao: string;
   tipo: "receita" | "despesa" | "ajuste";
   status: "previsto" | "pendente" | "liquidado";
-  meio?: "pix" | "debito" | "credito" | "dinheiro" | "boleto" | "ted_doc" | "transferencia" | "outro";
+  meio?: "pix" | "debito" | "credito" | "dinheiro" | "ted_doc" | "transferencia" | "outro";
   valorTotal: number;
   competenciaData: string;
   competenciaHora?: string;
@@ -113,7 +113,7 @@ type KeepAccountsSuggestion = {
 type UpdateLancamentosSuggestion = {
   lancamentoIds: number[];
   quantidade: number;
-  meio: "pix" | "debito" | "credito" | "dinheiro" | "boleto" | "ted_doc" | "transferencia" | "outro";
+  meio: "pix" | "debito" | "credito" | "dinheiro" | "ted_doc" | "transferencia" | "outro";
   filtroResumo: string;
   confianca: number;
   motivo: string;
@@ -152,6 +152,34 @@ type SearchPlan = {
   answerHint: string;
 };
 
+// Rascunho retornado pelo tool calling (criar_lancamento com confirmar: false)
+type ToolDraftSuggestion = {
+  descricao: string;
+  valor: number;
+  tipo: "receita" | "despesa";
+  contaId: number;
+  categoriaId: number;
+  data: string;
+  meio: string;
+};
+
+// Lançamento retornado por buscar_lancamentos via tool calling
+type ToolSearchResult = {
+  id: number;
+  descricao: string;
+  valor_total: string | number;
+  competencia_data: string;
+  categoria_nome?: string | null;
+  conta_nome?: string;
+  tipo?: string;
+};
+
+// IDs a deletar retornados pelo tool calling (deletar_lancamentos com confirmar: false)
+type ToolDeleteDraft = {
+  lancamentoIds: number[];
+  quantidade: number;
+};
+
 type AssistantMessage =
   | {
       id: string;
@@ -173,7 +201,11 @@ type AssistantMessage =
         | "transactions_update"
         | "transactions_date_update"
         | "transactions_delete"
-        | "info";
+        | "info"
+        // tool calling kinds
+        | "quick_add_tool"
+        | "search_tool"
+        | "delete_tool";
       results?: SearchResult[];
       suggestion?:
         | QuickAddSuggestion
@@ -183,8 +215,11 @@ type AssistantMessage =
         | KeepAccountsSuggestion
         | UpdateLancamentosSuggestion
         | UpdateLancamentosDataSuggestion
-        | DeleteLancamentosSuggestion;
+        | DeleteLancamentosSuggestion
+        | ToolDraftSuggestion;
       plan?: SearchPlan;
+      toolSearchResults?: ToolSearchResult[];
+      toolDeleteDraft?: ToolDeleteDraft;
     };
 
 function messageId() {
@@ -229,6 +264,51 @@ function initialAssistantMessage(): AssistantMessage {
   };
 }
 
+function sanitizeAssistantText(text: string) {
+  const normalized = text.trim();
+
+  if (
+    normalized.startsWith("Erro ao chamar Groq:") ||
+    normalized.includes("rate_limit_exceeded") ||
+    normalized.includes("Rate limit reached")
+  ) {
+    return "O assistente ficou sobrecarregado agora. Tente novamente em alguns segundos.";
+  }
+
+  return text;
+}
+
+function sanitizeAssistantHistory(messages: AssistantMessage[]) {
+  return messages.map((message) => {
+    if (message.role !== "assistant") {
+      return message;
+    }
+
+    return {
+      ...message,
+      text: sanitizeAssistantText(message.text),
+    };
+  });
+}
+
+function IconSparkAssistant({ className }: { className?: string }) {
+  return (
+    <svg aria-hidden className={className} fill="currentColor" height={26} viewBox="0 0 24 24" width={26}>
+      <path d="m14.5 2 1.6 5.8 5.8 1.6-5.8 1.6-1.6 5.8-1.6-5.8L7 9.4l5.9-1.6L14.5 2Z" />
+      <path d="M7 14.5 8 17l2.5.5-.5 2.5L8 21l-2.5-1-.5-2.5 2.5-.5L7 14.5ZM17 3l.9 2.1 2.1.9-2.1.9L17 9l-.9-2.1L14 6l2.1-.9L17 3Z" opacity={0.85} />
+    </svg>
+  );
+}
+
+function IconClose({ className }: { className?: string }) {
+  return (
+    <svg aria-hidden className={className} fill="none" height={22} stroke="currentColor" strokeLinecap="round" strokeWidth={2} viewBox="0 0 24 24" width={22}>
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </svg>
+  );
+}
+
 export function GlobalAssistant({
   gestoes,
 }: {
@@ -266,7 +346,7 @@ export function GlobalAssistant({
 
     if (storedHistory) {
       try {
-        setMessages(JSON.parse(storedHistory));
+        setMessages(sanitizeAssistantHistory(JSON.parse(storedHistory)));
         return;
       } catch {
         localStorage.removeItem(key);
@@ -275,6 +355,14 @@ export function GlobalAssistant({
 
     setMessages([initialAssistantMessage()]);
   }, [selectedGestaoId]);
+
+  useEffect(() => {
+    setMessages((current) => {
+      const sanitized = sanitizeAssistantHistory(current);
+      const changed = sanitized.some((message, index) => message.text !== current[index]?.text);
+      return changed ? sanitized : current;
+    });
+  }, []);
 
   useEffect(() => {
     setEditingQuickAddMessageId(null);
@@ -474,6 +562,12 @@ export function GlobalAssistant({
         body: JSON.stringify({
           prompt: prompt.trim(),
           gestaoId: selectedGestaoId,
+          // Histórico curto para manter o custo de tokens baixo
+          history: messages.slice(-6).map((m) => ({
+            role: m.role,
+            content: m.text,
+          })),
+          // Compatibilidade com o handler antigo
           previousPrompt: previousUser?.text,
           previousAnswer: previousAssistant?.text,
           previousKind: previousAssistant?.role === "assistant" ? previousAssistant.kind : undefined,
@@ -489,15 +583,28 @@ export function GlobalAssistant({
         throw new Error(data.error ?? "Falha ao consultar o assistente.");
       }
 
+      // Detecta rascunho de lançamento vindo do tool calling
+      const toolDraft = data.toolDraft as ToolDraftSuggestion | undefined;
+      const toolSearchResults = data.toolSearchResults as ToolSearchResult[] | undefined;
+      const toolDeleteDraft = data.toolDeleteDraft as ToolDeleteDraft | undefined;
+
       const assistantMessage: AssistantMessage = {
         id: messageId(),
         role: "assistant",
         text: data.answer,
-        provider: data.provider,
-        kind: data.kind,
+        provider: data.provider ?? "groq",
+        kind: toolDraft
+          ? "quick_add_tool"
+          : toolDeleteDraft
+            ? "delete_tool"
+            : toolSearchResults && toolSearchResults.length > 0
+              ? "search_tool"
+              : (data.kind ?? "info"),
         results: data.results,
-        suggestion: data.suggestion,
+        suggestion: toolDraft ?? data.suggestion,
         plan: data.plan,
+        ...(toolSearchResults ? { toolSearchResults } : {}),
+        ...(toolDeleteDraft ? { toolDeleteDraft } : {}),
       };
 
       setMessages((current) => [...current, assistantMessage]);
@@ -508,7 +615,7 @@ export function GlobalAssistant({
         {
           id: messageId(),
           role: "assistant",
-          text: error instanceof Error ? error.message : "Falha inesperada no assistente.",
+          text: sanitizeAssistantText(error instanceof Error ? error.message : "Falha inesperada no assistente."),
           provider: "info",
           kind: "info",
         },
@@ -975,21 +1082,130 @@ export function GlobalAssistant({
     }
   }
 
-  if (gestoes.length === 0) {
-    return null;
+  // Confirma lançamento vindo do tool calling — reenvia ao /api/assistant com instrução de confirmar
+  async function confirmToolQuickAdd(message: AssistantMessage) {
+    if (message.role !== "assistant" || message.kind !== "quick_add_tool" || !message.suggestion || !selectedGestaoId) {
+      return;
+    }
+
+    const draft = message.suggestion as ToolDraftSuggestion;
+    setLoading(true);
+
+    try {
+      const response = await fetch("/api/assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: `Confirmar e salvar o lançamento: ${draft.descricao}, R$ ${draft.valor}, tipo ${draft.tipo}, conta ${draft.contaId}, categoria ${draft.categoriaId}, data ${draft.data}, meio ${draft.meio}. Use criar_lancamento com confirmar: true.`,
+          gestaoId: selectedGestaoId,
+          history: [],
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Nao foi possivel salvar o lancamento.");
+      }
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: messageId(),
+          role: "assistant",
+          text: data.answer ?? "Lancamento salvo com sucesso.",
+          provider: data.provider ?? "groq",
+          kind: "info" as const,
+        },
+      ]);
+
+      router.refresh();
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: messageId(),
+          role: "assistant",
+          text: error instanceof Error ? error.message : "Nao foi possivel salvar o lancamento.",
+          provider: "info",
+          kind: "info" as const,
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Confirma exclusão vinda do tool calling
+  async function confirmToolDelete(message: AssistantMessage) {
+    if (message.role !== "assistant" || message.kind !== "delete_tool" || !selectedGestaoId) {
+      return;
+    }
+
+    // Recupera os IDs da mensagem
+    const msgWithDraft = message as AssistantMessage & { toolDeleteDraft?: ToolDeleteDraft };
+    const draft = msgWithDraft.toolDeleteDraft;
+
+    if (!draft) return;
+
+    setLoading(true);
+
+    try {
+      const response = await fetch("/api/assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: `Confirmar exclusão dos lançamentos com IDs: ${draft.lancamentoIds.join(", ")}. Use deletar_lancamentos com confirmar: true.`,
+          gestaoId: selectedGestaoId,
+          history: [],
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Nao foi possivel apagar os lancamentos.");
+      }
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: messageId(),
+          role: "assistant",
+          text: data.answer ?? `Apaguei ${draft.quantidade} lancamento(s) com sucesso.`,
+          provider: data.provider ?? "groq",
+          kind: "info" as const,
+        },
+      ]);
+
+      router.refresh();
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: messageId(),
+          role: "assistant",
+          text: error instanceof Error ? error.message : "Nao foi possivel apagar os lancamentos.",
+          provider: "info",
+          kind: "info" as const,
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
     <>
       <button
-        className={`fixed right-3 bottom-3 z-50 rounded-full bg-foreground px-4 py-2.5 text-xs font-semibold text-white shadow-[0_18px_50px_rgba(30,42,47,0.18)] transition-opacity duration-200 sm:right-5 sm:bottom-5 sm:px-5 sm:py-3 sm:text-sm lg:right-6 ${
-          open ? "pointer-events-none opacity-0" : "opacity-100"
-        }`}
+        aria-expanded={open}
+        aria-label={open ? "Fechar assistente de IA" : "Abrir assistente de IA"}
+        className="fixed right-3 bottom-3 z-[60] flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-foreground text-white shadow-[0_12px_40px_rgba(30,42,47,0.28)] ring-2 ring-white/15 transition-transform hover:scale-[1.04] active:scale-[0.98] sm:right-5 sm:bottom-5 sm:h-[3.75rem] sm:w-[3.75rem] lg:right-6"
         onClick={() => setOpen((current) => !current)}
+        title={open ? "Fechar assistente" : "Assistente IA"}
         type="button"
       >
-        <span className="sm:hidden">IA</span>
-        <span className="hidden sm:inline">Abrir assistente</span>
+        {open ? <IconClose className="text-white" /> : <IconSparkAssistant className="text-white" />}
       </button>
 
       <div
@@ -1033,17 +1249,25 @@ export function GlobalAssistant({
               Gestao ativa
             </label>
             <select
-              className="w-full rounded-2xl border border-line bg-background px-4 py-3 text-base sm:text-sm"
+              className="w-full rounded-2xl border border-line bg-background px-4 py-3 text-base sm:text-sm disabled:opacity-60"
+              disabled={gestoes.length === 0}
               id="gestao-assistente"
               onChange={(event) => setSelectedGestaoId(Number(event.target.value))}
               value={selectedGestao?.id ?? ""}
             >
-              {gestoes.map((gestao) => (
-                <option key={gestao.id} value={gestao.id}>
-                  {gestao.nome}
-                </option>
-              ))}
+              {gestoes.length === 0 ? (
+                <option value="">Nenhuma gestao disponivel</option>
+              ) : (
+                gestoes.map((gestao) => (
+                  <option key={gestao.id} value={gestao.id}>
+                    {gestao.nome}
+                  </option>
+                ))
+              )}
             </select>
+            {gestoes.length === 0 ? (
+              <p className="mt-2 text-sm text-muted">Crie uma gestao no app para usar o assistente com seus dados.</p>
+            ) : null}
           </div>
         </header>
 
@@ -1069,8 +1293,91 @@ export function GlobalAssistant({
                   <div className="mt-3 flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-muted">
                     <span>{providerLabel(message.provider)}</span>
                     <span>·</span>
-                    <span>{message.kind === "quick_add" || message.kind === "quick_add_batch" || message.kind === "account_create" || message.kind === "account_rename" || message.kind === "account_keep" || message.kind === "transactions_update" || message.kind === "transactions_date_update" || message.kind === "transactions_delete" ? "rascunho" : message.kind}</span>
+                    <span>{message.kind === "quick_add" || message.kind === "quick_add_batch" || message.kind === "account_create" || message.kind === "account_rename" || message.kind === "account_keep" || message.kind === "transactions_update" || message.kind === "transactions_date_update" || message.kind === "transactions_delete" || message.kind === "quick_add_tool" || message.kind === "delete_tool" ? "rascunho" : message.kind}</span>
                   </div>
+
+                  {/* ── TOOL CALLING: rascunho de novo lançamento ── */}
+                  {message.kind === "quick_add_tool" && message.suggestion ? (
+                    <div className="mt-4 space-y-2 rounded-2xl bg-surface px-3 py-3 text-sm">
+                      {(() => {
+                        const draft = message.suggestion as ToolDraftSuggestion;
+                        return (
+                          <>
+                            <p className="break-words">
+                              <strong>Descricao:</strong> {draft.descricao}
+                            </p>
+                            <p>
+                              <strong>Valor:</strong> {money(draft.valor)}
+                            </p>
+                            <p>
+                              <strong>Tipo:</strong> {draft.tipo}
+                            </p>
+                            <p>
+                              <strong>Data:</strong> {draft.data}
+                            </p>
+                            <p>
+                              <strong>Meio:</strong> {draft.meio}
+                            </p>
+                            <button
+                              className="mt-2 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                              disabled={loading}
+                              onClick={() => confirmToolQuickAdd(message)}
+                              type="button"
+                            >
+                              Confirmar e salvar
+                            </button>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  ) : null}
+
+                  {/* ── TOOL CALLING: resultados de busca ── */}
+                  {message.kind === "search_tool" ? (
+                    <div className="mt-4 space-y-2">
+                      {(message.toolSearchResults ?? [])
+                        .slice(0, 8)
+                        .map((result) => (
+                          <div className="rounded-2xl bg-surface px-3 py-3 text-sm" key={result.id}>
+                            <p className="break-words font-medium">{result.descricao}</p>
+                            <p className="mt-1 text-muted">
+                              {result.competencia_data}
+                              {result.conta_nome ? ` · ${result.conta_nome}` : ""}
+                              {result.categoria_nome ? ` · ${result.categoria_nome}` : ""}
+                              {" · "}
+                              <span className={result.tipo === "receita" ? "text-green-600" : ""}>
+                                {money(result.valor_total)}
+                              </span>
+                            </p>
+                          </div>
+                        ))}
+                    </div>
+                  ) : null}
+
+                  {/* ── TOOL CALLING: confirmação de exclusão ── */}
+                  {message.kind === "delete_tool" ? (
+                    <div className="mt-4 space-y-2 rounded-2xl bg-surface px-3 py-3 text-sm">
+                      {(() => {
+                        const draft = message.toolDeleteDraft;
+                        if (!draft) return null;
+                        return (
+                          <>
+                            <p>
+                              <strong>Lancamentos a apagar:</strong> {draft.quantidade}
+                            </p>
+                            <button
+                              className="mt-2 rounded-full bg-[var(--color-danger,#b42318)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                              disabled={loading}
+                              onClick={() => confirmToolDelete(message)}
+                              type="button"
+                            >
+                              Confirmar e apagar
+                            </button>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  ) : null}
 
                   {message.kind === "quick_add" && message.suggestion ? (
                     <div className="mt-4 space-y-2 rounded-2xl bg-surface px-3 py-3 text-sm">
@@ -1136,7 +1443,6 @@ export function GlobalAssistant({
                                     <option value="debito">Debito</option>
                                     <option value="credito">Credito</option>
                                     <option value="dinheiro">Dinheiro</option>
-                                    <option value="boleto">Boleto</option>
                                     <option value="ted_doc">TED/DOC</option>
                                     <option value="transferencia">Transferencia</option>
                                     <option value="outro">Outro</option>

@@ -3,7 +3,8 @@ import { NextResponse } from "next/server";
 import { quickAddSuggestionSchema } from "@ltcashflow/validation";
 
 import { auth } from "@/lib/server/auth";
-import { createLancamento, listContas, userHasGestaoAccess } from "@/lib/server/repository";
+import { userCanMutateGestao } from "@/lib/server/permissions";
+import { createLancamento, createTransferencia, listContas } from "@/lib/server/repository";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -24,7 +25,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Gestao e itens do extrato sao obrigatorios." }, { status: 400 });
   }
 
-  if (!(await userHasGestaoAccess(userId, gestaoId))) {
+  if (!(await userCanMutateGestao(userId, gestaoId))) {
     return NextResponse.json({ error: "Sem acesso a essa gestao." }, { status: 403 });
   }
 
@@ -59,10 +60,47 @@ export async function POST(request: Request) {
   const ids: number[] = [];
 
   for (const item of parsedItems) {
+    if (item.tipo === "transferencia") {
+      if (!item.contaDestinoId) {
+        return NextResponse.json(
+          {
+            error:
+              "A aplicacao precisa de uma conta destino de poupanca ou investimento para ser importada.",
+          },
+          { status: 400 },
+        );
+      }
+
+      const id = await createTransferencia({
+        gestaoId,
+        userId,
+        contaOrigemId: item.contaId,
+        contaDestinoId: item.contaDestinoId,
+        status: item.status,
+        descricao: item.descricao,
+        valorTotal: item.valorTotal,
+        competenciaData: item.competenciaData,
+        competenciaHora: item.competenciaHora,
+        vencimentoData: item.vencimentoData,
+      });
+
+      ids.push(id);
+      continue;
+    }
+
     const id = await createLancamento({
       gestaoId,
       userId,
-      ...item,
+      descricao: item.descricao,
+      tipo: item.tipo,
+      status: item.status,
+      meio: item.meio,
+      contaId: item.contaId,
+      categoriaId: item.categoriaId ?? 0,
+      valorTotal: item.valorTotal,
+      competenciaData: item.competenciaData,
+      competenciaHora: item.competenciaHora,
+      vencimentoData: item.vencimentoData,
     });
 
     ids.push(id);

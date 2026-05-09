@@ -2,10 +2,28 @@ import type { Metadata } from "next";
 import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
 
 import { GlobalAssistant } from "@/components/assistant/global-assistant";
+import type { GestaoOption } from "@/components/assistant/global-assistant";
 import { auth } from "@/lib/server/auth";
 import { listCategorias, listContas, listUserGestoes } from "@/lib/server/repository";
 
 import "./globals.css";
+
+async function gestoesForAssistant(userId: number): Promise<GestaoOption[]> {
+  const gestoes = await listUserGestoes(userId);
+
+  return Promise.all(
+    gestoes.map(async (g) => {
+      const [contas, categorias] = await Promise.all([listContas(g.id), listCategorias(g.id)]);
+
+      return {
+        id: g.id,
+        nome: g.nome,
+        contas: contas.map((c) => ({ id: c.id, nome: c.nome })),
+        categorias: categorias.map((c) => ({ id: c.id, nome: c.nome })),
+      };
+    }),
+  );
+}
 
 const heading = Space_Grotesk({
   variable: "--font-heading",
@@ -47,29 +65,8 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const session = await auth();
-  const gestoes =
-    session?.user?.id ? await listUserGestoes(Number(session.user.id)) : [];
-  const gestoesWithContext = await Promise.all(
-    gestoes.map(async (gestao) => {
-      const [contas, categorias] = await Promise.all([
-        listContas(gestao.id),
-        listCategorias(gestao.id),
-      ]);
-
-      return {
-        id: gestao.id,
-        nome: gestao.nome,
-        contas: contas.map((conta) => ({
-          id: conta.id,
-          nome: conta.nome,
-        })),
-        categorias: categorias.map((categoria) => ({
-          id: categoria.id,
-          nome: categoria.nome,
-        })),
-      };
-    }),
-  );
+  const assistantGestoes =
+    session?.user?.id ? await gestoesForAssistant(Number(session.user.id)) : [];
 
   return (
     <html
@@ -78,9 +75,7 @@ export default async function RootLayout({
     >
       <body className="min-h-full flex flex-col" suppressHydrationWarning>
         {children}
-        {session?.user?.id ? (
-          <GlobalAssistant gestoes={gestoesWithContext} />
-        ) : null}
+        {session?.user?.id ? <GlobalAssistant gestoes={assistantGestoes} /> : null}
       </body>
     </html>
   );
