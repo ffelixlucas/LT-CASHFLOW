@@ -24,3 +24,8 @@ CLAUDE.md
 **/AGENTS.md
 **/CLAUDE.md
 .github/copilot-instructions.md
+docs/.chunks/
+docs/.embeddings/
+docs/.registry.json
+docs/procloud-assistant-handoff.zip
+plano do cloud/
