@@ -243,6 +243,7 @@ export async function createLancamentoAction(formData: FormData) {
   const user = await getAuthenticatedUser();
   const gestaoId = Number(formData.get("gestaoId"));
   const competenciaData = normalizeDateInput(formData.get("competenciaData"));
+  const faturaCompetenciaData = normalizeDateInput(formData.get("faturaCompetenciaData"));
   const competenciaHora = normalizeTimeInput(formData.get("competenciaHora"));
   const vencimentoData = normalizeDateInput(formData.get("vencimentoData"));
 
@@ -260,6 +261,7 @@ export async function createLancamentoAction(formData: FormData) {
     descricao: formData.get("descricao"),
     valorTotal: formData.get("valorTotal"),
     competenciaData,
+    faturaCompetenciaData,
     competenciaHora,
     vencimentoData,
   });
@@ -276,6 +278,7 @@ export async function createLancamentoAction(formData: FormData) {
 
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/movimentacoes");
+  revalidatePath("/dashboard/cartao");
   revalidatePath("/dashboard/insights");
   redirect(dashboardUrl(gestaoId, "lancamento-criado"));
 }
@@ -284,6 +287,7 @@ export async function createTransferenciaAction(formData: FormData) {
   const user = await getAuthenticatedUser();
   const gestaoId = Number(formData.get("gestaoId"));
   const competenciaData = normalizeDateInput(formData.get("competenciaData"));
+  const faturaCompetenciaData = normalizeDateInput(formData.get("faturaCompetenciaData"));
   const competenciaHora = normalizeTimeInput(formData.get("competenciaHora"));
   const vencimentoData = normalizeDateInput(formData.get("vencimentoData"));
 
@@ -298,6 +302,7 @@ export async function createTransferenciaAction(formData: FormData) {
     descricao: formData.get("descricao"),
     valorTotal: formData.get("valorTotal"),
     competenciaData,
+    faturaCompetenciaData,
     competenciaHora,
     vencimentoData,
   });
@@ -315,12 +320,14 @@ export async function createTransferenciaAction(formData: FormData) {
     descricao: parsed.data.descricao,
     valorTotal: parsed.data.valorTotal,
     competenciaData: parsed.data.competenciaData,
+    faturaCompetenciaData: parsed.data.faturaCompetenciaData,
     competenciaHora: parsed.data.competenciaHora,
     vencimentoData: parsed.data.vencimentoData,
   });
 
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/movimentacoes");
+  revalidatePath("/dashboard/cartao");
   revalidatePath("/dashboard/insights");
   redirect(dashboardUrl(gestaoId, "transferencia-criada"));
 }
@@ -329,6 +336,7 @@ export async function updateLancamentoAction(formData: FormData) {
   const user = await getAuthenticatedUser();
   const gestaoId = Number(formData.get("gestaoId"));
   const competenciaData = normalizeDateInput(formData.get("competenciaData"));
+  const faturaCompetenciaData = normalizeDateInput(formData.get("faturaCompetenciaData"));
   const competenciaHora = normalizeTimeInput(formData.get("competenciaHora"));
   const vencimentoData = normalizeDateInput(formData.get("vencimentoData"));
 
@@ -357,6 +365,7 @@ export async function updateLancamentoAction(formData: FormData) {
     descricao: formData.get("descricao"),
     valorTotal: formData.get("valorTotal"),
     competenciaData,
+    faturaCompetenciaData,
     competenciaHora,
     vencimentoData,
   });
@@ -378,6 +387,7 @@ export async function updateLancamentoAction(formData: FormData) {
     descricao: parsed.data.descricao,
     valorTotal: parsed.data.valorTotal,
     competenciaData: parsed.data.competenciaData,
+    faturaCompetenciaData: parsed.data.faturaCompetenciaData,
     competenciaHora: parsed.data.competenciaHora,
     vencimentoData: parsed.data.vencimentoData,
   });
@@ -388,6 +398,7 @@ export async function updateLancamentoAction(formData: FormData) {
 
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/movimentacoes");
+  revalidatePath("/dashboard/cartao");
   revalidatePath("/dashboard/insights");
   redirect(dashboardUrl(gestaoId, "lancamento-atualizado"));
 }
@@ -412,6 +423,7 @@ export async function deleteLancamentoAction(formData: FormData) {
 
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/movimentacoes");
+  revalidatePath("/dashboard/cartao");
   revalidatePath("/dashboard/insights");
   redirect(dashboardUrl(gestaoId, "lancamento-excluido"));
 }

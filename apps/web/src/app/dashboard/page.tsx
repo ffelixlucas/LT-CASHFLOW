@@ -262,7 +262,12 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const contasPorLiquidez = agruparContasPorLiquidez(cashAccounts);
   const saldosAtuais = gestaoAtiva ? await getGestaoSaldosPorBucket(gestaoAtiva.id) : null;
   const saldoInicialDisponivel = contas
-    .filter((conta) => conta.tipo !== "cartao_credito")
+    .filter((conta) =>
+      conta.tipo === "corrente" ||
+      conta.tipo === "carteira" ||
+      conta.tipo === "caixa" ||
+      conta.tipo === "outro",
+    )
     .reduce((total, conta) => total + Number(conta.saldo_inicial ?? 0), 0);
   const lancamentos = gestaoAtiva ? await listRecentLancamentos(gestaoAtiva.id) : [];
   const periodoAtual = periodBounds(selectedPeriod);
@@ -282,7 +287,19 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         dateFrom: periodoAtual.from,
         dateTo: periodoAtual.to,
       })
-    : { entradas: "0", saidas: "0", guardado: "0", debito: "0", pix: "0", credito: "0", saldo: "0" };
+    : {
+        entradas: "0",
+        saidas: "0",
+        pagamentos_fatura: "0",
+        saidas_total: "0",
+        guardado: "0",
+        resgatado: "0",
+        debito: "0",
+        pix: "0",
+        credito: "0",
+        saldo: "0",
+        sobra: "0",
+      };
   const cartoesComCiclo = gestaoAtiva ? await listCreditCardStatementData(gestaoAtiva.id) : [];
   const hoje = new Date().toISOString().slice(0, 10);
   const baseRealFrom = gestaoAtiva?.inicio_em
@@ -296,6 +313,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       })
     : [];
   const guardadoAtual = Number(saldosAtuais?.poupanca ?? 0) + Number(saldosAtuais?.investimento ?? 0);
+  const disponivelAtual = Number(saldosAtuais?.disponivel ?? 0);
+  const tenhoHoje = disponivelAtual + guardadoAtual;
   const resumoCartao = cartoesComCiclo.reduce(
     (acc, card) => {
       const contaCartao = contas.find((conta) => conta.id === card.id);
@@ -490,11 +509,17 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         <div className="print-actions">
           {gestaoAtiva ? (
             <>
+              <Link className="tab" href={`/dashboard/semana?gestao=${gestaoAtiva.id}`}>
+                Semana
+              </Link>
               <Link className="tab" href={`/dashboard/cartao?gestao=${gestaoAtiva.id}`}>
-                Cartao
+                Cartão
+              </Link>
+              <Link className="tab" href={`/dashboard/reservas?gestao=${gestaoAtiva.id}`}>
+                Reservas
               </Link>
               <Link className="tab" href={`/dashboard/movimentacoes?gestao=${gestaoAtiva.id}`}>
-                Movimentacoes
+                Movimentações
               </Link>
               <Link className="tab" href={`/dashboard/insights?gestao=${gestaoAtiva.id}`}>
                 Insights
@@ -529,27 +554,49 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               </div>
             </div>
             <div className="summary-grid">
-              <article className="metric income">
-                <span>Entradas da conta corrente</span>
-                <strong>{money(resumoContaCorrentePeriodo.entradas ?? 0)}</strong>
+              <article className="metric" title="Soma de todas as contas hoje (corrente + reservas)">
+                <span>Tenho hoje</span>
+                <strong>{money(tenhoHoje)}</strong>
               </article>
-              <article className="metric expense">
-                <span>Saídas da conta corrente</span>
-                <strong>{money(resumoContaCorrentePeriodo.saidas ?? 0)}</strong>
+              <article className="metric income" title="Saldo real da conta corrente hoje — bate com o extrato do banco">
+                <span>Saldo na corrente</span>
+                <strong>{money(disponivelAtual)}</strong>
               </article>
-              <article className="metric card">
-                <span>Transferências para reserva</span>
-                <strong>{money(resumoContaCorrentePeriodo.guardado ?? 0)}</strong>
-              </article>
-              <article className="metric">
-                <span>Reserva atual</span>
+              <article className="metric card" title="Total guardado em poupança e investimentos">
+                <span>Reservado</span>
                 <strong>{money(guardadoAtual)}</strong>
               </article>
             </div>
 
-            <div className="rest-strip">
-              <span>Saldo da conta corrente no periodo</span>
-              <strong>{money(Number(resumoContaCorrentePeriodo.saldo ?? 0))}</strong>
+            <div className="summary-grid">
+              <article className="metric income" title="Receitas recebidas no período (sem contar resgates da reserva)">
+                <span>Entrou no período</span>
+                <strong>{money(resumoContaCorrentePeriodo.entradas ?? 0)}</strong>
+              </article>
+              <article className="metric expense" title="Despesas reais no período (Pix enviado, débito, fatura paga). Não conta aplicação na reserva.">
+                <span>Saiu no período</span>
+                <strong>{money(resumoContaCorrentePeriodo.saidas_total ?? 0)}</strong>
+              </article>
+              <article
+                className={`metric ${Number(resumoContaCorrentePeriodo.sobra ?? 0) >= 0 ? "income" : "expense"}`}
+                title="Entrou menos Saiu no período. Positivo = sobrou; negativo = faltou."
+              >
+                <span>Sobra do período</span>
+                <strong>{money(Number(resumoContaCorrentePeriodo.sobra ?? 0))}</strong>
+              </article>
+            </div>
+
+            <div className="rest-strip" title="Movimentos internos entre corrente e reserva (não somem do seu patrimônio)">
+              <span>
+                Aplicado na reserva: {money(Number(resumoContaCorrentePeriodo.guardado ?? 0))} · Resgatado:{" "}
+                {money(Number(resumoContaCorrentePeriodo.resgatado ?? 0))}
+              </span>
+              <strong>
+                Líquido: {money(
+                  Number(resumoContaCorrentePeriodo.guardado ?? 0)
+                    - Number(resumoContaCorrentePeriodo.resgatado ?? 0),
+                )}
+              </strong>
             </div>
             <p className="muted compact-hint">
               Base real desde {formatYearDay(baseRealFrom)}. Reserva configurada em {percent(percentualReserva)}%.

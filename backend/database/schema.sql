@@ -137,6 +137,7 @@ CREATE TABLE IF NOT EXISTS lancamentos (
   gestao_id BIGINT UNSIGNED NOT NULL,
   conta_id BIGINT UNSIGNED NOT NULL,
   conta_destino_id BIGINT UNSIGNED NULL,
+  fechamento_origem_id BIGINT UNSIGNED NULL,
   categoria_id BIGINT UNSIGNED NULL,
   criado_por_usuario_id BIGINT UNSIGNED NOT NULL,
   tipo ENUM('receita', 'despesa', 'transferencia', 'ajuste') NOT NULL,
@@ -146,6 +147,7 @@ CREATE TABLE IF NOT EXISTS lancamentos (
   observacoes TEXT NULL,
   valor_total DECIMAL(14,2) NOT NULL,
   competencia_data DATE NOT NULL,
+  fatura_competencia_data DATE NULL,
   competencia_hora TIME NULL,
   vencimento_data DATE NULL,
   liquidado_em DATETIME NULL,
@@ -157,17 +159,21 @@ CREATE TABLE IF NOT EXISTS lancamentos (
   atualizado_em DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_lancamentos_gestao_competencia (gestao_id, competencia_data),
+  KEY idx_lancamentos_gestao_fatura_competencia (gestao_id, fatura_competencia_data),
   KEY idx_lancamentos_gestao_competencia_hora (gestao_id, competencia_data, competencia_hora),
   KEY idx_lancamentos_gestao_status (gestao_id, status),
   KEY idx_lancamentos_categoria (categoria_id),
   KEY idx_lancamentos_conta (conta_id),
   KEY idx_lancamentos_criado_por_usuario (criado_por_usuario_id),
+  KEY idx_lancamentos_fechamento_origem (fechamento_origem_id),
   CONSTRAINT fk_lancamentos_gestao
     FOREIGN KEY (gestao_id) REFERENCES gestoes (id),
   CONSTRAINT fk_lancamentos_conta
     FOREIGN KEY (conta_id) REFERENCES contas (id),
   CONSTRAINT fk_lancamentos_conta_destino
     FOREIGN KEY (conta_destino_id) REFERENCES contas (id),
+  CONSTRAINT fk_lancamentos_fechamento_origem
+    FOREIGN KEY (fechamento_origem_id) REFERENCES fechamentos_periodo(id) ON DELETE SET NULL,
   CONSTRAINT fk_lancamentos_categoria
     FOREIGN KEY (categoria_id) REFERENCES categorias (id),
   CONSTRAINT fk_lancamentos_criado_por_usuario

@@ -70,6 +70,7 @@ export const createLancamentoSchema = z.object({
   descricao: z.string().min(3, "Descreva o lancamento."),
   valorTotal: z.coerce.number().positive(),
   competenciaData: z.string().min(10),
+  faturaCompetenciaData: z.string().optional(),
   competenciaHora: lancamentoHoraSchema,
   vencimentoData: z.string().optional(),
 }).superRefine((data, ctx) => {
@@ -104,6 +105,7 @@ export const createTransferenciaSchema = z
     descricao: z.string().min(3, "Descreva a transferencia."),
     valorTotal: z.coerce.number().positive(),
     competenciaData: z.string().min(10),
+    faturaCompetenciaData: z.string().optional(),
     competenciaHora: lancamentoHoraSchema,
     vencimentoData: z.string().optional(),
   })
@@ -129,6 +131,7 @@ export const updateLancamentoSchema = z
     descricao: z.string().min(3, "Descreva o lancamento."),
     valorTotal: z.coerce.number().positive(),
     competenciaData: z.string().min(10),
+    faturaCompetenciaData: z.string().optional(),
     competenciaHora: lancamentoHoraSchema,
     vencimentoData: z.string().optional(),
   })

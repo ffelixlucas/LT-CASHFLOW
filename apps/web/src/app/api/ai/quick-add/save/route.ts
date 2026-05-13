@@ -12,6 +12,7 @@ import {
   countSimilarLancamentosRecent,
   createLancamento,
   createTransferencia,
+  findRecentDuplicateLancamentoId,
 } from "@/lib/server/repository";
 
 function formatDate(date: Date) {
@@ -69,6 +70,23 @@ async function saveQuickAddSuggestion(input: {
 
   if (!suggestion.categoriaId) {
     throw new Error("categoria_ausente");
+  }
+
+  // Idempotência: se o mesmo lançamento (mesma conta, valor, descrição e data) já
+  // foi criado nos últimos 2 minutos, devolve o id existente em vez de duplicar.
+  // Protege contra cliques duplos no botão "Confirmar" e contra fluxos da IA que
+  // disparam dois INSERTs em sequência.
+  const duplicateId = await findRecentDuplicateLancamentoId({
+    gestaoId: input.gestaoId,
+    contaId: suggestion.contaId,
+    valorTotal: suggestion.valorTotal,
+    descricao: suggestion.descricao,
+    competenciaData: suggestion.competenciaData,
+    segundos: 120,
+  });
+
+  if (duplicateId != null) {
+    return duplicateId;
   }
 
   return createLancamento({

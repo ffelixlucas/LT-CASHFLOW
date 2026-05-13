@@ -54,6 +54,7 @@ export type LancamentoRow = RowDataPacket & {
   descricao: string;
   valor_total: string;
   competencia_data: string;
+  fatura_competencia_data: string | null;
   competencia_hora: string | null;
   vencimento_data: string | null;
   categoria_nome: string | null;
@@ -76,6 +77,7 @@ type LancamentoListItem = {
   descricao: string;
   valor_total: string;
   competencia_data: string;
+  fatura_competencia_data: string | null;
   competencia_hora: string | null;
   vencimento_data: string | null;
   categoria_nome: string | null;
@@ -96,6 +98,7 @@ export type SearchLancamentosInput = {
   maxValor?: number;
   dateFrom?: string;
   dateTo?: string;
+  dateField?: "competencia" | "fatura";
   order?: "asc" | "desc";
 };
 
@@ -130,11 +133,14 @@ export type ContaCorrentePeriodoResumoRow = RowDataPacket & {
   entradas: string | null;
   saidas: string | null;
   pagamentos_fatura: string | null;
+  saidas_total: string | null;
   guardado: string | null;
+  resgatado: string | null;
   debito: string | null;
   pix: string | null;
   credito: string | null;
   saldo: string | null;
+  sobra: string | null;
 };
 
 export type GestaoMembroResumoRow = RowDataPacket & {
@@ -185,6 +191,7 @@ export type CreditCardStatementMovementRow = RowDataPacket & {
   status: "previsto" | "pendente" | "liquidado" | "cancelado";
   valor_total: string;
   competencia_data: string;
+  fatura_competencia_data: string | null;
 };
 
 type SqlFilters = {
@@ -234,6 +241,10 @@ const ORDER_BY_LANCAMENTO_RECIENTE_DESC =
   "l.competencia_data DESC, COALESCE(l.competencia_hora, TIME(l.criado_em)) DESC, l.criado_em DESC";
 const ORDER_BY_LANCAMENTO_RECIENTE_ASC =
   "l.competencia_data ASC, COALESCE(l.competencia_hora, TIME(l.criado_em)) ASC, l.criado_em ASC";
+const ORDER_BY_LANCAMENTO_FATURA_DESC =
+  "COALESCE(l.fatura_competencia_data, l.competencia_data) DESC, COALESCE(l.competencia_hora, TIME(l.criado_em)) DESC, l.criado_em DESC";
+const ORDER_BY_LANCAMENTO_FATURA_ASC =
+  "COALESCE(l.fatura_competencia_data, l.competencia_data) ASC, COALESCE(l.competencia_hora, TIME(l.criado_em)) ASC, l.criado_em ASC";
 
 /** Inclui lançamentos em que a conta aparece como origem ou destino (transferências). */
 const JOIN_LANCAMENTOS_NA_CONTA =
@@ -794,6 +805,7 @@ function buildOpeningLancamentos(
         descricao: conta.tipo === "cartao_credito" ? "Abertura do cartao" : "Abertura da conta",
         valor_total: saldoInicial.toFixed(2),
         competencia_data: aberturaEm,
+        fatura_competencia_data: null,
         competencia_hora: "00:00",
         vencimento_data: aberturaEm,
         categoria_nome: "Abertura",
@@ -1037,6 +1049,31 @@ export async function updateCategoria(input: {
   return result.affectedRows > 0;
 }
 
+/**
+ * Calcula a `fatura_competencia_data` (primeiro dia do mês de vencimento da fatura)
+ * para uma compra de cartão. Regra observada nos dados:
+ *  - se `dia da compra < fechamento_dia`  → fatura no mês seguinte (mês + 1).
+ *  - se `dia da compra >= fechamento_dia` → fatura pula um mês (mês + 2).
+ */
+export function computeFaturaCompetenciaParaCompra(
+  competenciaData: string,
+  fechamentoDia: number,
+): string {
+  const [yearRaw, monthRaw, dayRaw] = competenciaData.split("-").map(Number);
+  const year = yearRaw ?? 1970;
+  const month = monthRaw ?? 1;
+  const day = dayRaw ?? 1;
+
+  let targetMonth = day >= fechamentoDia ? month + 2 : month + 1;
+  let targetYear = year;
+  while (targetMonth > 12) {
+    targetMonth -= 12;
+    targetYear += 1;
+  }
+
+  return `${targetYear}-${String(targetMonth).padStart(2, "0")}-01`;
+}
+
 export async function createLancamento(input: {
   gestaoId: number;
   contaId: number;
@@ -1049,6 +1086,7 @@ export async function createLancamento(input: {
   descricao: string;
   valorTotal: number;
   competenciaData: string;
+  faturaCompetenciaData?: string;
   competenciaHora?: string;
   vencimentoData?: string;
 }) {
@@ -1076,6 +1114,27 @@ export async function createLancamento(input: {
   try {
     await connection.beginTransaction();
 
+    // Se for compra no cartão e a `fatura_competencia_data` não foi informada,
+    // calcula automaticamente baseado no fechamento_dia da conta — assim a
+    // compra entra na fatura correta mesmo quando criada pela IA / quick-add.
+    let faturaCompetenciaResolved = input.faturaCompetenciaData || null;
+    if (!faturaCompetenciaResolved && input.tipo === "despesa") {
+      const [contaRows] = await connection.query<Array<RowDataPacket & { tipo: string; fechamento_dia: number | null }>>(
+        `SELECT tipo, fechamento_dia FROM contas WHERE id = ? LIMIT 1`,
+        [input.contaId],
+      );
+      const contaInfo = contaRows[0];
+      if (contaInfo && contaInfo.tipo === "cartao_credito") {
+        const fechamentoDia = Number(contaInfo.fechamento_dia ?? 1);
+        if (fechamentoDia >= 1 && fechamentoDia <= 31) {
+          faturaCompetenciaResolved = computeFaturaCompetenciaParaCompra(
+            input.competenciaData,
+            fechamentoDia,
+          );
+        }
+      }
+    }
+
     const [result] = await connection.query<ResultSetHeader>(
       `
         INSERT INTO lancamentos (
@@ -1089,11 +1148,12 @@ export async function createLancamento(input: {
           descricao,
           valor_total,
           competencia_data,
+          fatura_competencia_data,
           competencia_hora,
           vencimento_data,
           liquidado_em
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         input.gestaoId,
@@ -1106,6 +1166,7 @@ export async function createLancamento(input: {
         input.descricao,
         input.valorTotal,
         input.competenciaData,
+        faturaCompetenciaResolved,
         input.competenciaHora ?? null,
         input.vencimentoData || null,
         input.status === "liquidado" ? new Date() : null,
@@ -1152,6 +1213,7 @@ export async function createTransferencia(input: {
   descricao: string;
   valorTotal: number;
   competenciaData: string;
+  faturaCompetenciaData?: string;
   competenciaHora?: string;
   vencimentoData?: string;
 }) {
@@ -1438,12 +1500,13 @@ export async function listCreditCardStatementData(gestaoId: number) {
         l.tipo,
         l.status,
         l.valor_total,
-        DATE_FORMAT(l.competencia_data, '%Y-%m-%d') AS competencia_data
+        DATE_FORMAT(l.competencia_data, '%Y-%m-%d') AS competencia_data,
+        DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-%d') AS fatura_competencia_data
       FROM lancamentos l
       WHERE l.gestao_id = ?
         AND l.status <> 'cancelado'
         AND (l.conta_id IN (${placeholders}) OR l.conta_destino_id IN (${placeholders}))
-      ORDER BY ${ORDER_BY_LANCAMENTO_RECIENTE_DESC}
+      ORDER BY ${ORDER_BY_LANCAMENTO_FATURA_DESC}
       LIMIT 2000
     `,
     [gestaoId, ...cardIds, ...cardIds],
@@ -1520,6 +1583,7 @@ export async function listRecentLancamentosForConta(input: {
         l.descricao,
         l.valor_total,
         DATE_FORMAT(l.competencia_data, '%Y-%m-%d') AS competencia_data,
+        DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-%d') AS fatura_competencia_data,
         TIME_FORMAT(l.competencia_hora, '%H:%i') AS competencia_hora,
         DATE_FORMAT(l.vencimento_data, '%Y-%m-%d') AS vencimento_data,
         c.nome AS categoria_nome,
@@ -1564,6 +1628,7 @@ export async function listRecentLancamentos(gestaoId: number) {
         l.descricao,
         l.valor_total,
         DATE_FORMAT(l.competencia_data, '%Y-%m-%d') AS competencia_data,
+        DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-%d') AS fatura_competencia_data,
         TIME_FORMAT(l.competencia_hora, '%H:%i') AS competencia_hora,
         DATE_FORMAT(l.vencimento_data, '%Y-%m-%d') AS vencimento_data,
         c.nome AS categoria_nome,
@@ -1610,6 +1675,7 @@ export async function listLancamentosPorPeriodo(input: {
         l.descricao,
         l.valor_total,
         DATE_FORMAT(l.competencia_data, '%Y-%m-%d') AS competencia_data,
+        DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-%d') AS fatura_competencia_data,
         TIME_FORMAT(l.competencia_hora, '%H:%i') AS competencia_hora,
         DATE_FORMAT(l.vencimento_data, '%Y-%m-%d') AS vencimento_data,
         c.nome AS categoria_nome,
@@ -1758,7 +1824,9 @@ export async function getContaCorrentePeriodoResumo(input: {
           ),
           0
         ) AS pagamentos_fatura,
+        COALESCE(SUM(CASE WHEN l.tipo = 'despesa' THEN l.valor_total ELSE 0 END), 0) AS saidas_total,
         COALESCE(SUM(CASE WHEN l.tipo = 'transferencia' AND ctd.tipo IN ('poupanca', 'investimento') THEN l.valor_total ELSE 0 END), 0) AS guardado,
+        COALESCE(SUM(CASE WHEN l.tipo = 'transferencia' AND ct.tipo IN ('poupanca', 'investimento') AND ctd.tipo IN ('corrente', 'carteira', 'caixa', 'outro') THEN l.valor_total ELSE 0 END), 0) AS resgatado,
         COALESCE(SUM(CASE WHEN l.tipo = 'despesa' AND l.meio = 'debito' THEN l.valor_total ELSE 0 END), 0) AS debito,
         COALESCE(SUM(CASE WHEN l.tipo = 'despesa' AND l.meio = 'pix' THEN l.valor_total ELSE 0 END), 0) AS pix,
         COALESCE(SUM(CASE WHEN l.tipo = 'despesa' AND l.meio = 'credito' THEN l.valor_total ELSE 0 END), 0) AS credito,
@@ -1773,7 +1841,17 @@ export async function getContaCorrentePeriodoResumo(input: {
             END
           ),
           0
-        ) AS saldo
+        ) AS saldo,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN l.tipo = 'receita' THEN l.valor_total
+              WHEN l.tipo = 'despesa' THEN -l.valor_total
+              ELSE 0
+            END
+          ),
+          0
+        ) AS sobra
       FROM lancamentos l
       INNER JOIN contas ct
         ON ct.id = l.conta_id
@@ -1783,7 +1861,10 @@ export async function getContaCorrentePeriodoResumo(input: {
         AND l.status <> 'cancelado'
         AND l.competencia_data >= ?
         AND l.competencia_data <= ?
-        AND ct.tipo IN ('corrente', 'carteira', 'caixa', 'outro')
+        AND (
+          ct.tipo IN ('corrente', 'carteira', 'caixa', 'outro')
+          OR (l.tipo = 'transferencia' AND ctd.tipo IN ('corrente', 'carteira', 'caixa', 'outro'))
+        )
     `,
     [input.gestaoId, input.dateFrom, input.dateTo],
   );
@@ -1792,22 +1873,28 @@ export async function getContaCorrentePeriodoResumo(input: {
     entradas: "0",
     saidas: "0",
     pagamentos_fatura: "0",
+    saidas_total: "0",
     guardado: "0",
+    resgatado: "0",
     debito: "0",
     pix: "0",
     credito: "0",
     saldo: "0",
+    sobra: "0",
   };
 
   return {
     entradas: base.entradas ?? "0",
     saidas: base.saidas ?? "0",
     pagamentos_fatura: base.pagamentos_fatura ?? "0",
+    saidas_total: base.saidas_total ?? "0",
     guardado: base.guardado ?? "0",
+    resgatado: base.resgatado ?? "0",
     debito: base.debito ?? "0",
     pix: base.pix ?? "0",
     credito: base.credito ?? "0",
     saldo: base.saldo ?? "0",
+    sobra: base.sobra ?? "0",
   };
 }
 
@@ -1870,6 +1957,7 @@ export async function updateLancamento(input: {
   descricao: string;
   valorTotal: number;
   competenciaData: string;
+  faturaCompetenciaData?: string;
   competenciaHora?: string;
   vencimentoData?: string;
 }) {
@@ -1896,6 +1984,7 @@ export async function updateLancamento(input: {
           descricao = ?,
           valor_total = ?,
           competencia_data = ?,
+          fatura_competencia_data = ?,
           competencia_hora = ?,
           vencimento_data = ?,
           liquidado_em = IF(? = 'liquidado', COALESCE(liquidado_em, NOW()), NULL)
@@ -1912,6 +2001,7 @@ export async function updateLancamento(input: {
         input.descricao,
         input.valorTotal,
         input.competenciaData,
+        input.faturaCompetenciaData || null,
         input.competenciaHora ?? null,
         input.vencimentoData || null,
         input.status,
@@ -1981,6 +2071,10 @@ export async function updateLancamento(input: {
 function buildLancamentoFilters(filters: SearchLancamentosInput): SqlFilters {
   const conditions = ["l.gestao_id = ?"];
   const params: Array<string | number> = [filters.gestaoId];
+  const dateExpression =
+    filters.dateField === "fatura"
+      ? "COALESCE(l.fatura_competencia_data, l.competencia_data)"
+      : "l.competencia_data";
 
   if (filters.text) {
     conditions.push(
@@ -2022,12 +2116,12 @@ function buildLancamentoFilters(filters: SearchLancamentosInput): SqlFilters {
   }
 
   if (filters.dateFrom) {
-    conditions.push("l.competencia_data >= ?");
+    conditions.push(`${dateExpression} >= ?`);
     params.push(filters.dateFrom);
   }
 
   if (filters.dateTo) {
-    conditions.push("l.competencia_data <= ?");
+    conditions.push(`${dateExpression} <= ?`);
     params.push(filters.dateTo);
   }
 
@@ -2053,6 +2147,7 @@ export async function searchLancamentos(filters: SearchLancamentosInput) {
         l.descricao,
         l.valor_total,
         DATE_FORMAT(l.competencia_data, '%Y-%m-%d') AS competencia_data,
+        DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-%d') AS fatura_competencia_data,
         TIME_FORMAT(l.competencia_hora, '%H:%i') AS competencia_hora,
         DATE_FORMAT(l.vencimento_data, '%Y-%m-%d') AS vencimento_data,
         c.nome AS categoria_nome,
@@ -2081,14 +2176,18 @@ export async function listLancamentosForContaRange(input: {
   contaId: number;
   dateFrom?: string;
   dateTo?: string;
+  dateField?: "competencia" | "fatura";
 }) {
   const filters: SearchLancamentosInput = {
     gestaoId: input.gestaoId,
     contaId: input.contaId,
     dateFrom: input.dateFrom,
     dateTo: input.dateTo,
+    dateField: input.dateField,
   };
   const { conditions, params } = buildLancamentoFilters(filters);
+  const orderBy =
+    input.dateField === "fatura" ? ORDER_BY_LANCAMENTO_FATURA_ASC : ORDER_BY_LANCAMENTO_RECIENTE_ASC;
 
   const [rows] = await pool.query<LancamentoRow[]>(
     `
@@ -2104,6 +2203,7 @@ export async function listLancamentosForContaRange(input: {
         l.descricao,
         l.valor_total,
         DATE_FORMAT(l.competencia_data, '%Y-%m-%d') AS competencia_data,
+        DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-%d') AS fatura_competencia_data,
         TIME_FORMAT(l.competencia_hora, '%H:%i') AS competencia_hora,
         DATE_FORMAT(l.vencimento_data, '%Y-%m-%d') AS vencimento_data,
         c.nome AS categoria_nome,
@@ -2118,7 +2218,7 @@ export async function listLancamentosForContaRange(input: {
       LEFT JOIN categorias c
         ON c.id = l.categoria_id
       WHERE ${conditions.join(" AND ")}
-      ORDER BY ${ORDER_BY_LANCAMENTO_RECIENTE_ASC}
+      ORDER BY ${orderBy}
     `,
     params,
   );
@@ -2143,6 +2243,7 @@ export async function findLatestLancamento(filters: SearchLancamentosInput) {
         l.descricao,
         l.valor_total,
         DATE_FORMAT(l.competencia_data, '%Y-%m-%d') AS competencia_data,
+        DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-%d') AS fatura_competencia_data,
         TIME_FORMAT(l.competencia_hora, '%H:%i') AS competencia_hora,
         DATE_FORMAT(l.vencimento_data, '%Y-%m-%d') AS vencimento_data,
         c.nome AS categoria_nome,
@@ -2185,6 +2286,7 @@ export async function findLargestLancamento(
         l.descricao,
         l.valor_total,
         DATE_FORMAT(l.competencia_data, '%Y-%m-%d') AS competencia_data,
+        DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-%d') AS fatura_competencia_data,
         TIME_FORMAT(l.competencia_hora, '%H:%i') AS competencia_hora,
         DATE_FORMAT(l.vencimento_data, '%Y-%m-%d') AS vencimento_data,
         c.nome AS categoria_nome,
@@ -2602,6 +2704,49 @@ export async function countSimilarLancamentosRecent(input: {
   return Number(rows[0]?.c ?? 0);
 }
 
+/**
+ * Busca um lançamento "gêmeo" criado nos últimos N segundos (default 120s) — usado
+ * para idempotência em fluxos de criação automática (assistente IA) que podem disparar
+ * dois INSERT por loops de tool calling ou cliques duplicados.
+ */
+export async function findRecentDuplicateLancamentoId(input: {
+  gestaoId: number;
+  contaId: number;
+  valorTotal: number;
+  descricao: string;
+  competenciaData: string;
+  segundos?: number;
+}): Promise<number | null> {
+  const segundos = input.segundos ?? 120;
+
+  const [rows] = await pool.query<Array<RowDataPacket & { id: number }>>(
+    `
+      SELECT id
+      FROM lancamentos
+      WHERE gestao_id = ?
+        AND conta_id = ?
+        AND status <> 'cancelado'
+        AND tipo <> 'transferencia'
+        AND ABS(valor_total - ?) < 0.009
+        AND LOWER(TRIM(descricao)) = LOWER(TRIM(?))
+        AND competencia_data = ?
+        AND criado_em >= DATE_SUB(NOW(), INTERVAL ? SECOND)
+      ORDER BY id DESC
+      LIMIT 1
+    `,
+    [
+      input.gestaoId,
+      input.contaId,
+      input.valorTotal,
+      input.descricao,
+      input.competenciaData,
+      segundos,
+    ],
+  );
+
+  return rows[0]?.id != null ? Number(rows[0].id) : null;
+}
+
 export async function updateLancamentosMeio(input: {
   gestaoId: number;
   lancamentoIds: number[];
@@ -2655,6 +2800,565 @@ export async function updateLancamentosCompetenciaData(input: {
   }
 
   return result.affectedRows;
+}
+
+// ============================================================
+// Fechamentos de periodo (semanal / mensal)
+// ============================================================
+
+export type FechamentoPeriodoRow = RowDataPacket & {
+  id: number;
+  gestao_id: number;
+  tipo: "semanal" | "mensal";
+  periodo_inicio: string;
+  periodo_fim: string;
+  fechado_em: string;
+  fechado_por_usuario_id: number;
+  entradas: string;
+  saidas_corrente: string;
+  compras_cartao: string;
+  sobra: string;
+  reservado: string;
+  pagamento_fatura: string;
+  ajuste_dia_a_dia_tipo: "nenhum" | "aporte" | "resgate";
+  ajuste_dia_a_dia_valor: string;
+  apenas_snapshot: number;
+  lancamento_reserva_id: number | null;
+  /** JSON: [{ contaId, nome, valor }] — quanto foi para cada reserva neste fechamento. */
+  reservas_por_conta: unknown;
+  observacoes: string | null;
+  fechado_por_nome?: string | null;
+};
+
+export type SemanaMetricas = {
+  entradas: number;
+  saidasCorrente: number;
+  comprasCartao: number;
+  sobra: number;
+};
+
+export type SemanaResumoDia = {
+  data: string;
+  entradas: number;
+  /** Débito, Pix etc. na corrente (sem pagamento de fatura). */
+  saidasCorrente: number;
+  /** Pagamento de fatura na corrente naquele dia. */
+  pagamentoFatura: number;
+  /** Transferência saindo da corrente (ex.: aplicação CDB). */
+  transferenciaSaida: number;
+  /** Transferência entrando na corrente (ex.: resgate). */
+  transferenciaEntrada: number;
+  comprasCartao: number;
+};
+
+const SQL_NOT_PAGAMENTO_FATURA = `
+  NOT (
+    l.descricao LIKE 'Pagamento efetuado - Fatura Cartão Inter%'
+    OR l.descricao LIKE 'Pagamento efetuado - Fatura Cartao Inter%'
+    OR l.descricao LIKE '%Fatura Cartão%'
+    OR l.descricao LIKE '%Fatura Cartao%'
+  )
+`;
+
+/** Despesa na corrente que é pagamento de fatura (para detalhe dia a dia). */
+const SQL_PAGAMENTO_FATURA = `
+  (
+    l.descricao LIKE 'Pagamento efetuado - Fatura Cartão Inter%'
+    OR l.descricao LIKE 'Pagamento efetuado - Fatura Cartao Inter%'
+    OR l.descricao LIKE '%Fatura Cartão%'
+    OR l.descricao LIKE '%Fatura Cartao%'
+  )
+`;
+
+/** Calcula as metricas chave de uma semana (sem persistir). */
+export async function getSemanaMetricas(input: {
+  gestaoId: number;
+  inicio: string;
+  fim: string;
+}): Promise<SemanaMetricas> {
+  const [rows] = await pool.query<
+    Array<
+      RowDataPacket & {
+        entradas: string | null;
+        saidas_corrente: string | null;
+        compras_cartao: string | null;
+      }
+    >
+  >(
+    `
+      SELECT
+        COALESCE(
+          SUM(
+            CASE
+              WHEN l.tipo = 'receita' AND ct.tipo IN ('corrente','carteira','caixa','outro')
+              THEN l.valor_total
+              ELSE 0
+            END
+          ),
+          0
+        ) AS entradas,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN l.tipo = 'despesa'
+                AND ct.tipo IN ('corrente','carteira','caixa','outro')
+                AND ${SQL_NOT_PAGAMENTO_FATURA}
+              THEN l.valor_total
+              ELSE 0
+            END
+          ),
+          0
+        ) AS saidas_corrente,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN l.tipo = 'despesa' AND ct.tipo = 'cartao_credito'
+              THEN l.valor_total
+              ELSE 0
+            END
+          ),
+          0
+        ) AS compras_cartao
+      FROM lancamentos l
+      INNER JOIN contas ct ON ct.id = l.conta_id
+      WHERE l.gestao_id = ?
+        AND l.status <> 'cancelado'
+        AND l.competencia_data >= ?
+        AND l.competencia_data <= ?
+    `,
+    [input.gestaoId, input.inicio, input.fim],
+  );
+
+  const row = rows[0];
+  const entradas = Number(row?.entradas ?? 0);
+  const saidas = Number(row?.saidas_corrente ?? 0);
+  const cartao = Number(row?.compras_cartao ?? 0);
+
+  return {
+    entradas,
+    saidasCorrente: saidas,
+    comprasCartao: cartao,
+    sobra: entradas - saidas,
+  };
+}
+
+/**
+ * Soma dos pagamentos de fatura (despesa na corrente com descrição "Fatura Cart…")
+ * dentro de uma janela típica do ciclo da fatura `X-01`. Considera pagamentos
+ * cujo `competencia_data` cai entre 7 dias antes e 14 dias depois da fatura,
+ * cobrindo pagamentos antecipados e atrasos de uma a duas semanas.
+ */
+export async function getPagamentosFaturaParaCiclo(input: {
+  gestaoId: number;
+  faturaCompetenciaData: string;
+}): Promise<number> {
+  const [rows] = await pool.query<Array<RowDataPacket & { total: string | null }>>(
+    `
+      SELECT COALESCE(SUM(l.valor_total), 0) AS total
+      FROM lancamentos l
+      INNER JOIN contas ct ON ct.id = l.conta_id
+      WHERE l.gestao_id = ?
+        AND l.status <> 'cancelado'
+        AND l.tipo = 'despesa'
+        AND ct.tipo IN ('corrente', 'carteira', 'caixa', 'outro')
+        AND ${SQL_PAGAMENTO_FATURA}
+        AND l.competencia_data >= DATE_SUB(?, INTERVAL 7 DAY)
+        AND l.competencia_data <= DATE_ADD(?, INTERVAL 14 DAY)
+    `,
+    [input.gestaoId, input.faturaCompetenciaData, input.faturaCompetenciaData],
+  );
+
+  return Number(rows[0]?.total ?? 0);
+}
+
+/** Soma dos pagamentos de fatura do cartão na corrente (já lançados no extrato). */
+export async function getSemanaPagamentosFatura(input: {
+  gestaoId: number;
+  inicio: string;
+  fim: string;
+}): Promise<number> {
+  const [rows] = await pool.query<Array<RowDataPacket & { total: string | null }>>(
+    `
+      SELECT COALESCE(SUM(l.valor_total), 0) AS total
+      FROM lancamentos l
+      INNER JOIN contas ct ON ct.id = l.conta_id
+      WHERE l.gestao_id = ?
+        AND l.status <> 'cancelado'
+        AND l.tipo = 'despesa'
+        AND ct.tipo IN ('corrente', 'carteira', 'caixa', 'outro')
+        AND l.competencia_data >= ?
+        AND l.competencia_data <= ?
+        AND (
+          l.descricao LIKE 'Pagamento efetuado - Fatura Cartão Inter%'
+          OR l.descricao LIKE '%Fatura Cartão%'
+          OR l.descricao LIKE '%Fatura Cartao%'
+        )
+    `,
+    [input.gestaoId, input.inicio, input.fim],
+  );
+
+  return Number(rows[0]?.total ?? 0);
+}
+
+/** Metricas dia a dia (segunda → domingo) para o detalhe da semana. */
+export async function getSemanaResumoPorDia(input: {
+  gestaoId: number;
+  inicio: string;
+  fim: string;
+}): Promise<SemanaResumoDia[]> {
+  const [rows] = await pool.query<
+    Array<
+      RowDataPacket & {
+        data: string;
+        entradas: string | null;
+        saidas_corrente: string | null;
+        pagamento_fatura: string | null;
+        transferencia_saida: string | null;
+        transferencia_entrada: string | null;
+        compras_cartao: string | null;
+      }
+    >
+  >(
+    `
+      SELECT
+        DATE_FORMAT(l.competencia_data, '%Y-%m-%d') AS data,
+        COALESCE(
+          SUM(CASE WHEN l.tipo='receita' AND c_orig.tipo IN ('corrente','carteira','caixa','outro')
+                   THEN l.valor_total ELSE 0 END),
+          0
+        ) AS entradas,
+        COALESCE(
+          SUM(CASE WHEN l.tipo='despesa' AND c_orig.tipo IN ('corrente','carteira','caixa','outro')
+                    AND ${SQL_NOT_PAGAMENTO_FATURA}
+                   THEN l.valor_total ELSE 0 END),
+          0
+        ) AS saidas_corrente,
+        COALESCE(
+          SUM(CASE WHEN l.tipo='despesa' AND c_orig.tipo IN ('corrente','carteira','caixa','outro')
+                    AND ${SQL_PAGAMENTO_FATURA}
+                   THEN l.valor_total ELSE 0 END),
+          0
+        ) AS pagamento_fatura,
+        COALESCE(
+          SUM(CASE WHEN l.tipo='transferencia' AND c_orig.tipo IN ('corrente','carteira','caixa','outro')
+                   THEN l.valor_total ELSE 0 END),
+          0
+        ) AS transferencia_saida,
+        COALESCE(
+          SUM(CASE WHEN l.tipo='transferencia' AND c_dest.tipo IN ('corrente','carteira','caixa','outro')
+                   THEN l.valor_total ELSE 0 END),
+          0
+        ) AS transferencia_entrada,
+        COALESCE(
+          SUM(CASE WHEN l.tipo='despesa' AND c_orig.tipo='cartao_credito'
+                   THEN l.valor_total ELSE 0 END),
+          0
+        ) AS compras_cartao
+      FROM lancamentos l
+      INNER JOIN contas c_orig ON c_orig.id = l.conta_id
+      LEFT JOIN contas c_dest ON c_dest.id = l.conta_destino_id
+      WHERE l.gestao_id = ?
+        AND l.status <> 'cancelado'
+        AND l.competencia_data >= ?
+        AND l.competencia_data <= ?
+      GROUP BY DATE_FORMAT(l.competencia_data, '%Y-%m-%d')
+      ORDER BY data ASC
+    `,
+    [input.gestaoId, input.inicio, input.fim],
+  );
+
+  return rows.map((row) => ({
+    data: row.data,
+    entradas: Number(row.entradas ?? 0),
+    saidasCorrente: Number(row.saidas_corrente ?? 0),
+    pagamentoFatura: Number(row.pagamento_fatura ?? 0),
+    transferenciaSaida: Number(row.transferencia_saida ?? 0),
+    transferenciaEntrada: Number(row.transferencia_entrada ?? 0),
+    comprasCartao: Number(row.compras_cartao ?? 0),
+  }));
+}
+
+export async function findFechamentoPeriodo(input: {
+  gestaoId: number;
+  tipo: "semanal" | "mensal";
+  inicio: string;
+}) {
+  const [rows] = await pool.query<FechamentoPeriodoRow[]>(
+    `
+      SELECT
+        f.id, f.gestao_id, f.tipo,
+        DATE_FORMAT(f.periodo_inicio, '%Y-%m-%d') AS periodo_inicio,
+        DATE_FORMAT(f.periodo_fim, '%Y-%m-%d') AS periodo_fim,
+        f.fechado_em, f.fechado_por_usuario_id,
+        f.entradas, f.saidas_corrente, f.compras_cartao,
+        f.sobra, f.reservado, f.reservas_por_conta, f.pagamento_fatura,
+        f.ajuste_dia_a_dia_tipo, f.ajuste_dia_a_dia_valor,
+        f.apenas_snapshot,
+        f.lancamento_reserva_id, f.observacoes,
+        u.nome AS fechado_por_nome
+      FROM fechamentos_periodo f
+      LEFT JOIN usuarios u ON u.id = f.fechado_por_usuario_id
+      WHERE f.gestao_id = ?
+        AND f.tipo = ?
+        AND f.periodo_inicio = ?
+      LIMIT 1
+    `,
+    [input.gestaoId, input.tipo, input.inicio],
+  );
+
+  return rows[0] ?? null;
+}
+
+export async function listFechamentosPeriodo(input: {
+  gestaoId: number;
+  tipo: "semanal" | "mensal";
+  limit?: number;
+}) {
+  const lim = Math.min(Math.max(input.limit ?? 26, 1), 200);
+
+  const [rows] = await pool.query<FechamentoPeriodoRow[]>(
+    `
+      SELECT
+        f.id, f.gestao_id, f.tipo,
+        DATE_FORMAT(f.periodo_inicio, '%Y-%m-%d') AS periodo_inicio,
+        DATE_FORMAT(f.periodo_fim, '%Y-%m-%d') AS periodo_fim,
+        f.fechado_em, f.fechado_por_usuario_id,
+        f.entradas, f.saidas_corrente, f.compras_cartao,
+        f.sobra, f.reservado, f.reservas_por_conta, f.pagamento_fatura,
+        f.ajuste_dia_a_dia_tipo, f.ajuste_dia_a_dia_valor,
+        f.apenas_snapshot,
+        f.lancamento_reserva_id, f.observacoes,
+        u.nome AS fechado_por_nome
+      FROM fechamentos_periodo f
+      LEFT JOIN usuarios u ON u.id = f.fechado_por_usuario_id
+      WHERE f.gestao_id = ?
+        AND f.tipo = ?
+      ORDER BY f.periodo_inicio DESC
+      LIMIT ${lim}
+    `,
+    [input.gestaoId, input.tipo],
+  );
+
+  return rows;
+}
+
+/** Persiste o fechamento da semana (snapshot) e cria opcionalmente a transferencia da reserva. */
+export async function createFechamentoSemanal(input: {
+  gestaoId: number;
+  userId: number;
+  inicio: string;
+  fim: string;
+  entradas: number;
+  saidasCorrente: number;
+  comprasCartao: number;
+  /** Valor que você associa ao "guardei na reserva neste fechamento" (sempre vai no snapshot). */
+  reservadoNoFechamento: number;
+  /** Valor associado ao "paguei o cartão neste fechamento" (já está no extrato; só registro). */
+  pagamentoFatura: number;
+  /** Aporte/resgate usado para zerar a semana no Porquinho Dia a Dia (snapshot). */
+  ajusteDiaADiaTipo?: "nenhum" | "aporte" | "resgate";
+  ajusteDiaADiaValor?: number;
+  /** Se true, não cria transferência — útil para mapear semanas já feitas no passado. */
+  apenasSnapshot: boolean;
+  /** Lista de transferências reservas (uma por reserva preenchida). Só usadas se !apenasSnapshot. */
+  transferenciasReserva: Array<{ valor: number; contaOrigemId: number; contaDestinoId: number }>;
+  /** Detalhe por conta para o snapshot (sempre gravado quando informado). */
+  reservasPorConta: Array<{ contaId: number; nome: string; valor: number }> | null;
+  observacoes?: string | null;
+}) {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const reservado = Math.max(0, Number(input.reservadoNoFechamento) || 0);
+
+    const transferenciasValidas = input.apenasSnapshot
+      ? []
+      : (input.transferenciasReserva ?? []).filter(
+          (tr) =>
+            tr &&
+            tr.valor > 0 &&
+            tr.contaOrigemId > 0 &&
+            tr.contaDestinoId > 0 &&
+            tr.contaOrigemId !== tr.contaDestinoId,
+        );
+
+    const lancamentoIds: number[] = [];
+    for (const tr of transferenciasValidas) {
+      const [transferenciaResult] = await connection.query<ResultSetHeader>(
+        `
+          INSERT INTO lancamentos (
+            gestao_id, conta_id, conta_destino_id, categoria_id, criado_por_usuario_id,
+            tipo, status, meio, descricao, valor_total, competencia_data, liquidado_em
+          )
+          VALUES (?, ?, ?, NULL, ?, 'transferencia', 'liquidado', 'transferencia', ?, ?, ?, NOW())
+        `,
+        [
+          input.gestaoId,
+          tr.contaOrigemId,
+          tr.contaDestinoId,
+          input.userId,
+          `Reserva do fechamento semanal (${input.inicio} a ${input.fim})`,
+          tr.valor,
+          input.fim,
+        ],
+      );
+
+      lancamentoIds.push(transferenciaResult.insertId);
+    }
+
+    const lancamentoReservaId = lancamentoIds[0] ?? null;
+
+    const sobra = input.entradas - input.saidasCorrente;
+    const pagamentoFatura = Math.max(0, Number(input.pagamentoFatura) || 0);
+    const ajusteDiaADiaTipo = input.ajusteDiaADiaTipo ?? "nenhum";
+    const ajusteDiaADiaValor = Math.max(0, Number(input.ajusteDiaADiaValor) || 0);
+    const apenasSnapshot = input.apenasSnapshot ? 1 : 0;
+
+    const reservasPorContaJson =
+      input.reservasPorConta && input.reservasPorConta.length > 0
+        ? JSON.stringify(input.reservasPorConta)
+        : null;
+
+    await connection.query<ResultSetHeader>(
+      `
+        INSERT INTO fechamentos_periodo (
+          gestao_id, tipo, periodo_inicio, periodo_fim,
+          fechado_em, fechado_por_usuario_id,
+          entradas, saidas_corrente, compras_cartao,
+          sobra, reservado, reservas_por_conta, pagamento_fatura,
+          ajuste_dia_a_dia_tipo, ajuste_dia_a_dia_valor,
+          apenas_snapshot,
+          lancamento_reserva_id, observacoes
+        )
+        VALUES (?, 'semanal', ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          fechado_em = NOW(),
+          fechado_por_usuario_id = VALUES(fechado_por_usuario_id),
+          entradas = VALUES(entradas),
+          saidas_corrente = VALUES(saidas_corrente),
+          compras_cartao = VALUES(compras_cartao),
+          sobra = VALUES(sobra),
+          reservado = VALUES(reservado),
+          reservas_por_conta = VALUES(reservas_por_conta),
+          pagamento_fatura = VALUES(pagamento_fatura),
+          ajuste_dia_a_dia_tipo = VALUES(ajuste_dia_a_dia_tipo),
+          ajuste_dia_a_dia_valor = VALUES(ajuste_dia_a_dia_valor),
+          apenas_snapshot = VALUES(apenas_snapshot),
+          lancamento_reserva_id = COALESCE(VALUES(lancamento_reserva_id), lancamento_reserva_id),
+          observacoes = VALUES(observacoes)
+      `,
+      [
+        input.gestaoId,
+        input.inicio,
+        input.fim,
+        input.userId,
+        input.entradas,
+        input.saidasCorrente,
+        input.comprasCartao,
+        sobra,
+        reservado,
+        reservasPorContaJson,
+        pagamentoFatura,
+        ajusteDiaADiaTipo,
+        ajusteDiaADiaValor,
+        apenasSnapshot,
+        lancamentoReservaId,
+        input.observacoes ?? null,
+      ],
+    );
+
+    await connection.commit();
+
+    await registerAudit({
+      userId: input.userId,
+      gestaoId: input.gestaoId,
+      action: "create",
+      module: "fechamentos",
+      entity: "fechamento_semanal",
+      details: {
+        inicio: input.inicio,
+        fim: input.fim,
+        sobra,
+        reservado,
+        pagamentoFatura,
+        ajusteDiaADiaTipo,
+        ajusteDiaADiaValor,
+        apenasSnapshot: input.apenasSnapshot,
+        lancamentoIds,
+      },
+    });
+
+    return { ok: true, lancamentoReservaId, lancamentoIds };
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+/** Total de aportes e resgates nas poupancas no periodo. */
+export async function getReservasResumoPeriodo(input: {
+  gestaoId: number;
+  inicio: string;
+  fim: string;
+}) {
+  const [rows] = await pool.query<
+    Array<
+      RowDataPacket & {
+        aportado: string | null;
+        resgatado: string | null;
+        rendimentos: string | null;
+      }
+    >
+  >(
+    `
+      SELECT
+        COALESCE(
+          SUM(
+            CASE
+              WHEN l.tipo='transferencia' AND ctd.tipo IN ('poupanca','investimento')
+              THEN l.valor_total ELSE 0 END
+          ),
+          0
+        ) AS aportado,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN l.tipo='transferencia' AND cto.tipo IN ('poupanca','investimento')
+                AND ctd.tipo IN ('corrente','carteira','caixa','outro')
+              THEN l.valor_total ELSE 0 END
+          ),
+          0
+        ) AS resgatado,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN l.tipo='receita' AND cto.tipo IN ('poupanca','investimento')
+              THEN l.valor_total ELSE 0 END
+          ),
+          0
+        ) AS rendimentos
+      FROM lancamentos l
+      INNER JOIN contas cto ON cto.id = l.conta_id
+      LEFT JOIN contas ctd ON ctd.id = l.conta_destino_id
+      WHERE l.gestao_id = ?
+        AND l.status <> 'cancelado'
+        AND l.competencia_data >= ?
+        AND l.competencia_data <= ?
+    `,
+    [input.gestaoId, input.inicio, input.fim],
+  );
+
+  const row = rows[0];
+
+  return {
+    aportado: Number(row?.aportado ?? 0),
+    resgatado: Number(row?.resgatado ?? 0),
+    rendimentos: Number(row?.rendimentos ?? 0),
+  };
 }
 
 export async function deleteLancamentos(input: {
