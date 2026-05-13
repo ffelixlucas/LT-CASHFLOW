@@ -30,6 +30,8 @@ type LancamentoItem = {
   descricao: string;
   valor_total: string;
   competencia_data: string;
+  fatura_competencia_data?: string | null;
+  data_compra?: string | null;
   competencia_hora: string | null;
   vencimento_data: string | null;
   categoria_nome: string | null;
@@ -58,21 +60,32 @@ function signedMoney(value: string | number | null | undefined, tipo: string) {
   return `${prefix}${money(value)}`;
 }
 
+const TIPOS_CORRENTE = new Set(["corrente", "carteira", "caixa", "outro"]);
+
+function ehContaCorrente(tipo: string | null | undefined) {
+  return !!tipo && TIPOS_CORRENTE.has(tipo);
+}
+
+function ehEventoForaDaCorrente(item: LancamentoItem) {
+  // Eventos que NÃO impactam a corrente: compras/receitas dentro do cartão,
+  // rendimentos e despesas dentro de poupança/investimento, etc.
+  return item.tipo !== "transferencia" && !ehContaCorrente(item.conta_tipo);
+}
+
 function transferenciaSignedValue(item: LancamentoItem) {
   const valor = Number(item.valor_total ?? 0);
-  const origemEhReserva = item.conta_tipo === "poupanca" || item.conta_tipo === "investimento";
-  const destinoEhReserva =
-    item.conta_destino_tipo === "poupanca" || item.conta_destino_tipo === "investimento";
+  const origemCorrente = ehContaCorrente(item.conta_tipo);
+  const destinoCorrente = ehContaCorrente(item.conta_destino_tipo);
 
-  if (destinoEhReserva && !origemEhReserva) {
+  if (origemCorrente && !destinoCorrente) {
     return -valor;
   }
 
-  if (origemEhReserva && !destinoEhReserva) {
+  if (destinoCorrente && !origemCorrente) {
     return valor;
   }
 
-  return -valor;
+  return 0;
 }
 
 function aberturaMoney(value: string | number | null | undefined) {
@@ -226,6 +239,14 @@ function dateTimeLabel(item: Pick<LancamentoItem, "competencia_data" | "competen
   const time = formatTimeForDisplay(item.competencia_hora);
 
   return time ? `${date} · ${time}` : date;
+}
+
+function purchaseDateLabel(item: Pick<LancamentoItem, "data_compra" | "competencia_data">) {
+  if (!item.data_compra || item.data_compra === item.competencia_data) {
+    return null;
+  }
+
+  return `Compra: ${formatDateForDisplay(item.data_compra)}`;
 }
 
 function movementDotTone(tipo: string) {
@@ -461,6 +482,7 @@ export function RecentLancamentosTable({
   saldoInicialDisponivel = 0,
   compact = false,
   showFiltersSummary = true,
+  showGroupBalance = true,
   showSummaryCards = true,
 }: {
   gestaoId: number;
@@ -470,6 +492,7 @@ export function RecentLancamentosTable({
   saldoInicialDisponivel?: number;
   compact?: boolean;
   showFiltersSummary?: boolean;
+  showGroupBalance?: boolean;
   showSummaryCards?: boolean;
 }) {
   const [selectedLancamentoId, setSelectedLancamentoId] = useState<number | null>(null);
@@ -592,12 +615,18 @@ export function RecentLancamentosTable({
   }, [search, tipoFilter, statusFilter, meioFilter, contaFilter, categoriaFilter, periodFilter, dateFrom, dateTo]);
 
   const filteredSummary = useMemo(() => {
+    // Para o resumo de fluxo "líquido", só contam eventos que tocam a conta corrente
+    // (corrente/carteira/caixa). Compras/rendimentos dentro do cartão ou das reservas
+    // não saem nem entram da corrente — só as transferências entre corrente e essas
+    // contas (pagamento de fatura, aplicação, resgate) entram de fato.
     const flow = computeCashFlow(
-      filteredLancamentos.map((item) => ({
-        tipo: item.tipo as "receita" | "despesa" | "transferencia" | "ajuste",
-        status: item.status as "previsto" | "pendente" | "liquidado" | "cancelado",
-        valor: Number(item.valor_total),
-      })),
+      filteredLancamentos
+        .filter((item) => !ehEventoForaDaCorrente(item))
+        .map((item) => ({
+          tipo: item.tipo as "receita" | "despesa" | "transferencia" | "ajuste",
+          status: item.status as "previsto" | "pendente" | "liquidado" | "cancelado",
+          valor: Number(item.valor_total),
+        })),
     );
 
     return {
@@ -626,21 +655,27 @@ export function RecentLancamentosTable({
         continue;
       }
 
-      const itemSaldo =
-        item.tipo === "receita"
+      // O saldo do extrato reflete a corrente: ignoramos receitas/despesas que
+      // moram dentro de cartão, poupança ou investimento — elas não tocam a
+      // corrente. As transferências envolvendo essas contas (pagamento de fatura,
+      // aplicação, resgate) entram via `transferenciaSignedValue`, que só conta
+      // o lado da corrente.
+      const itemSaldo = ehEventoForaDaCorrente(item)
+        ? 0
+        : item.tipo === "receita"
           ? Number(item.valor_total)
           : item.tipo === "despesa"
             ? -Number(item.valor_total)
             : item.tipo === "transferencia"
               ? transferenciaSignedValue(item)
-            : 0;
+              : 0;
 
       running += itemSaldo;
       runningByDate.set(item.competencia_data, running);
     }
 
     return runningByDate;
-  }, [filteredLancamentos]);
+  }, [filteredLancamentos, saldoInicialDisponivel]);
 
   const groupedLancamentos = useMemo(() => {
     const groups: Array<{
@@ -652,7 +687,11 @@ export function RecentLancamentosTable({
 
     for (const item of paginatedLancamentos) {
       const lastGroup = groups[groups.length - 1];
-        const itemSaldo = item.is_abertura
+      const foraDaCorrente = !item.is_abertura && ehEventoForaDaCorrente(item);
+      const aberturaForaDaCorrente = item.is_abertura && !ehContaCorrente(item.conta_tipo);
+      const itemSaldo = foraDaCorrente || aberturaForaDaCorrente
+        ? 0
+        : item.is_abertura
           ? Number(item.valor_total) >= 0
             ? Number(item.valor_total)
             : -Math.abs(Number(item.valor_total))
@@ -662,7 +701,7 @@ export function RecentLancamentosTable({
               ? -Number(item.valor_total)
               : item.tipo === "transferencia"
                 ? transferenciaSignedValue(item)
-              : 0;
+                : 0;
 
       if (!lastGroup || lastGroup.date !== item.competencia_data) {
         groups.push({
@@ -1209,14 +1248,16 @@ export function RecentLancamentosTable({
                           <p className="mt-0.5 text-[10px] font-medium text-muted">
                             {group.items.length} movimentacao(oes)
                           </p>
-                          <p
-                            className={`mt-0.5 text-[11px] font-semibold ${
-                              group.saldoFinal >= 0 ? "text-success" : "text-accent-strong"
-                            }`}
-                          >
-                            Saldo {group.saldoFinal >= 0 ? "+" : "-"}
-                            {money(Math.abs(group.saldoFinal))}
-                          </p>
+                          {showGroupBalance ? (
+                            <p
+                              className={`mt-0.5 text-[11px] font-semibold ${
+                                group.saldoFinal >= 0 ? "text-success" : "text-accent-strong"
+                              }`}
+                            >
+                              Saldo {group.saldoFinal >= 0 ? "+" : "-"}
+                              {money(Math.abs(group.saldoFinal))}
+                            </p>
+                          ) : null}
                         </div>
                         <div className="h-px flex-1 bg-line/80" />
                       </div>
@@ -1258,6 +1299,9 @@ export function RecentLancamentosTable({
                             <p className="mt-1 text-xs text-muted">
                               {dateTimeLabel(item)}
                             </p>
+                            {purchaseDateLabel(item) ? (
+                              <p className="mt-0.5 text-xs text-muted">{purchaseDateLabel(item)}</p>
+                            ) : null}
                           </div>
                         </div>
                       </td>
@@ -1476,6 +1520,13 @@ export function RecentLancamentosTable({
                 defaultValue={selectedLancamento.competencia_data}
                 name="competenciaData"
                 required
+              />
+
+              <DateInput
+                className="rounded-2xl border border-line bg-background px-4 py-3"
+                defaultValue={selectedLancamento.fatura_competencia_data ?? undefined}
+                name="faturaCompetenciaData"
+                placeholder="Competencia da fatura"
               />
 
               <input

@@ -5,8 +5,8 @@ import { redirect } from "next/navigation";
 import { SignOutButton } from "@/components/auth/sign-out-button";
 import { RecentLancamentosTable } from "@/components/dashboard/recent-lancamentos-table";
 import { requireUser } from "@/lib/server/auth";
-import { formatDateForDisplay } from "@/lib/date";
 import {
+  getPagamentosFaturaParaCiclo,
   listCategorias,
   listContas,
   listCreditCardStatementData,
@@ -34,7 +34,7 @@ function money(value: string | number | null | undefined) {
   }).format(amount);
 }
 
-function normalizePeriod(value: string | undefined): PeriodKey {
+function normalizePeriod(): PeriodKey {
   return "month";
 }
 
@@ -113,11 +113,23 @@ function sum(values: Array<number | string | null | undefined>) {
   return values.reduce<number>((acc, value) => acc + Number(value ?? 0), 0);
 }
 
+function compareLancamentosPorCompraDesc(a: CardLancamento, b: CardLancamento) {
+  const dataDiff = b.competencia_data.localeCompare(a.competencia_data);
+  if (dataDiff !== 0) return dataDiff;
+
+  const horaA = a.competencia_hora ?? "00:00";
+  const horaB = b.competencia_hora ?? "00:00";
+  const horaDiff = horaB.localeCompare(horaA);
+  if (horaDiff !== 0) return horaDiff;
+
+  return b.id - a.id;
+}
+
 function buildCardSummary(
   rows: CardLancamento[],
   cardId: number,
-  saldoInicialAberto: number,
   limiteCredito: number | null,
+  pagamentosCorrente: number,
 ) {
   const compras = sum(
     rows
@@ -125,7 +137,8 @@ function buildCardSummary(
       .map((row) => row.valor_total),
   );
 
-  const pagamentos = sum(
+  // Pagamentos vindos como transferência/receita com destino no cartão (modelo "ideal").
+  const pagamentosDirecionados = sum(
     rows
       .filter(
         (row) =>
@@ -135,17 +148,22 @@ function buildCardSummary(
       .map((row) => row.valor_total),
   );
 
-  const abertura = Number(saldoInicialAberto);
-  const utilizadoTotal = abertura + Number(compras);
-  const saldoEmAberto = Math.max(0, utilizadoTotal - Number(pagamentos));
+  // Soma com pagamentos vindos como `despesa` na corrente com descrição "Fatura Cart…"
+  // (modelo do fechamento semanal). Esses pagamentos são contabilizados via query
+  // separada na janela do ciclo da fatura corrente.
+  const pagamentos = Number(pagamentosDirecionados) + Number(pagamentosCorrente ?? 0);
+
+  // Saldo em aberto do ciclo = compras do ciclo − pagamentos atribuídos ao ciclo.
+  // O `saldo_inicial` da conta cartão representa apenas a "foto" do cartão na abertura
+  // do app — para um cartão que vem sendo pago periodicamente, esse valor já está
+  // coberto pelos pagamentos históricos e somá-lo aqui inflaria o utilizado.
+  const saldoEmAberto = Math.max(0, Number(compras) - Number(pagamentos));
   const limiteDisponivel =
-    limiteCredito !== null ? Math.max(0, Number(limiteCredito) - utilizadoTotal) : null;
+    limiteCredito !== null ? Math.max(0, Number(limiteCredito) - saldoEmAberto) : null;
 
   return {
     compras,
     pagamentos,
-    abertura,
-    utilizadoTotal,
     saldoEmAberto,
     limiteDisponivel,
   };
@@ -165,7 +183,7 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
   const gestaoAtiva =
     gestoes.find((item) => item.id === requestedGestaoId) ?? gestoes[0] ?? null;
 
-  const selectedPeriod = normalizePeriod(typeof params.period === "string" ? params.period : undefined);
+  const selectedPeriod = normalizePeriod();
 
   const contas = gestaoAtiva ? await listContas(gestaoAtiva.id) : [];
   const categorias = gestaoAtiva ? await listCategorias(gestaoAtiva.id) : [];
@@ -185,7 +203,7 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
     movimentosCartaoAtivo.length > 0
       ? new Date(
           `${[...movimentosCartaoAtivo]
-            .map((movement) => movement.competencia_data)
+            .map((movement) => movement.fatura_competencia_data ?? movement.competencia_data)
             .sort()
             .at(-1)}T12:00:00`,
         )
@@ -200,17 +218,31 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
           contaId: contaCartaoAtiva.id,
           dateFrom: periodoAtual.from,
           dateTo: periodoAtual.to,
+          dateField: "fatura",
         })
       : [];
+  const lancamentosCartaoPeriodo = [...lancamentosPeriodo].sort(compareLancamentosPorCompraDesc);
+
+  // Pagamentos de fatura registrados como `despesa` na corrente — não aparecem em
+  // `lancamentosPeriodo` (que só traz movimentos do cartão), então precisamos
+  // somá-los à parte usando a janela do ciclo da fatura em referência.
+  const faturaReferenciaIso = periodoAtual.from;
+  const pagamentosFaturaCorrente =
+    gestaoAtiva && contaCartaoAtiva
+      ? await getPagamentosFaturaParaCiclo({
+          gestaoId: gestaoAtiva.id,
+          faturaCompetenciaData: faturaReferenciaIso,
+        })
+      : 0;
 
   const resumoCartao = contaCartaoAtiva
     ? buildCardSummary(
-        lancamentosPeriodo,
+        lancamentosCartaoPeriodo,
         contaCartaoAtiva.id,
-        Number(contaCartaoAtiva.saldo_inicial ?? 0),
         contaCartaoAtiva.limite_credito !== null ? Number(contaCartaoAtiva.limite_credito ?? 0) : null,
+        pagamentosFaturaCorrente,
       )
-    : { compras: 0, pagamentos: 0, abertura: 0, utilizadoTotal: 0, saldoEmAberto: 0, limiteDisponivel: null };
+    : { compras: 0, pagamentos: 0, saldoEmAberto: 0, limiteDisponivel: null };
 
   return (
     <main className="min-h-screen bg-background px-3 py-3 sm:px-6 sm:py-6 lg:px-10 lg:py-10">
@@ -336,11 +368,13 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
                 </p>
               </div>
               <div className="rounded-[1rem] border border-line bg-background px-4 py-3">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-muted">Lançamentos</p>
-                <p className="mt-2 text-lg font-semibold">{lancamentosPeriodo.length}</p>
+                <p className="text-[11px] uppercase tracking-[0.18em] text-muted">Pago neste ciclo</p>
+                <p className="mt-2 text-lg font-semibold">
+                  {resumoCartao.pagamentos > 0 ? money(resumoCartao.pagamentos) : "—"}
+                </p>
               </div>
               <div className="rounded-[1rem] border border-line bg-background px-4 py-3">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-muted">Status do ciclo</p>
+                <p className="text-[11px] uppercase tracking-[0.18em] text-muted">Saldo em aberto</p>
                 <p className="mt-2 text-lg font-semibold">
                   {resumoCartao.saldoEmAberto > 0 ? money(resumoCartao.saldoEmAberto) : "Fechado"}
                 </p>
@@ -370,10 +404,11 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
               categorias={categorias}
               contas={contas}
               gestaoId={gestaoAtiva.id}
-              lancamentos={lancamentosPeriodo}
+              lancamentos={lancamentosCartaoPeriodo}
               compact
               showSummaryCards={false}
               showFiltersSummary={false}
+              showGroupBalance={false}
             />
             </section>
           </>

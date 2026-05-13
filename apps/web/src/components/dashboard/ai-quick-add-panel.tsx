@@ -3,6 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { preserveScrollPosition, restorePreservedScrollPosition } from "@/lib/client/scroll-preservation";
+
 type SelectOption = {
   id: number;
   nome: string;
@@ -102,7 +104,10 @@ export function AiQuickAddPanel({
 
       setPrompt("");
       setSuggestion(null);
+      preserveScrollPosition();
       router.refresh();
+      setTimeout(restorePreservedScrollPosition, 120);
+      setTimeout(restorePreservedScrollPosition, 360);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha inesperada.");
     } finally {

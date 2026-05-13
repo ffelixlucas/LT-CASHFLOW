@@ -12,6 +12,7 @@ import {
 } from "@/app/dashboard/actions";
 import { DateInput } from "@/components/ui/date-input";
 import { MoneyInput } from "@/components/ui/money-input";
+import { preserveScrollPosition, restorePreservedScrollPosition } from "@/lib/client/scroll-preservation";
 import { formatDateForDisplay } from "@/lib/date";
 
 type ContaOption = {
@@ -361,7 +362,10 @@ export function DashboardActionCenter({
       setPreview(null);
       setStatementText("");
       closeModal();
+      preserveScrollPosition();
       router.refresh();
+      setTimeout(restorePreservedScrollPosition, 120);
+      setTimeout(restorePreservedScrollPosition, 360);
     } catch (error) {
       setReconcileError(error instanceof Error ? error.message : "Nao foi possivel importar os faltantes.");
     } finally {

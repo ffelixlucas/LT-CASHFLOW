@@ -11,6 +11,7 @@ import { userCanMutateGestao } from "@/lib/server/permissions";
 import {
   createLancamento,
   deleteLancamentos,
+  findRecentDuplicateLancamentoId,
   getAvailableBalance,
   getCashOverview,
   listCategorias,
@@ -213,6 +214,10 @@ const TOOLS = [
             type: "string",
             description: "Data no formato YYYY-MM-DD. Padrão: hoje.",
           },
+          hora: {
+            type: "string",
+            description: "Hora no formato HH:mm quando o usuario informar horario.",
+          },
           meio: {
             type: "string",
             enum: ["pix", "credito", "debito", "dinheiro", "ted_doc", "transferencia", "outro"],
@@ -309,8 +314,10 @@ Regras:
 - Para consultas, use as ferramentas e interprete os JSONs retornados.
 - Para "primeiro lancamento", "mais antigo" ou "inicio da base", use buscar_lancamentos com ordem asc.
 - Para "ultimo lancamento" ou "mais recente", use buscar_lancamentos com ordem desc.
-- Para criar ou deletar, use confirmar: false primeiro (rascunho / aviso), e somente confirmar: true apos o usuario aceitar.
+- Para criar ou deletar, SEMPRE pare apos confirmar: false (rascunho / aviso) e aguarde uma nova mensagem do usuario.
+- NUNCA chame uma ferramenta de mutacao com confirmar: true no mesmo turno do rascunho. Confirmar: true so e permitido em um turno cuja mensagem do usuario seja uma confirmacao explicita ("pode salvar", "confirma", "apaga mesmo", etc.).
 - Para IDs de conta ou categoria, use listar_contas e listar_categorias quando necessario.
+- Quando o usuario disser "igual sempre", "como sempre", "igual o ultimo de X" ou "mesmo padrao", use o historico de lancamentos parecidos para reaproveitar descricao, conta, categoria e meio. Preserve valor, data e hora pedidos pelo usuario.
 - Formate valores em R$ no texto final.
 - Nao invente dados fora do retorno das ferramentas.
 - Se uma ferramenta retornar erro, explique ao usuario.`;
@@ -335,6 +342,7 @@ type AssistantToolDraft = {
   contaId: number;
   categoriaId: number;
   data: string;
+  hora?: string;
   meio: string;
 };
 
@@ -428,6 +436,7 @@ function mergeToolArtifactsFromResult(toolName: string, jsonStr: string, out: As
       contaId,
       categoriaId,
       data: String(raw.data ?? ""),
+      hora: typeof raw.hora === "string" ? raw.hora : undefined,
       meio: typeof raw.meio === "string" ? raw.meio : "pix",
     };
   }
@@ -469,12 +478,109 @@ function clampLimite(value: unknown): number {
   return Math.min(50, Math.floor(n));
 }
 
+function normalizeText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+}
+
+function extractTimeFromText(value: string) {
+  const match = value.match(/\b(?:as|às)?\s*([01]?\d|2[0-3])[:h]([0-5]\d)\b/i);
+
+  if (!match?.[1] || !match[2]) {
+    return null;
+  }
+
+  return `${String(Number(match[1])).padStart(2, "0")}:${match[2]}`;
+}
+
+function wantsHistoricalPattern(value: string) {
+  const normalized = normalizeText(value);
+
+  return (
+    /\b(igual|como)\s+(sempre|costume)\b/.test(normalized) ||
+    /\bigual\s+(o|a)?\s*(ultimo|ultima|anterior)\b/.test(normalized) ||
+    /\b(com|da|do)\s+descri[cç]ao\s+igual\b/.test(normalized) ||
+    /\b(mesmo|mesma)\s+padrao\b/.test(normalized) ||
+    /\bpix\s+recebido\s+-?\s*\d{2,3}(?:[.\s-]\d{3})+\b/.test(normalized)
+  );
+}
+
+function extractHistoricalSearchText(value: string) {
+  const normalized = normalizeText(value);
+  const pixReceivedMatch = normalized.match(/\bpix\s+recebido\s+([0-9][0-9.\s-]{2,})/);
+
+  if (pixReceivedMatch?.[1]) {
+    return pixReceivedMatch[1].trim().replace(/\s+/g, " ");
+  }
+
+  const numericMatch = normalized.match(/\b\d{2,3}(?:[.\s-]\d{3})+\b/);
+
+  if (numericMatch?.[0]) {
+    return numericMatch[0].trim();
+  }
+
+  return null;
+}
+
+async function applyHistoricalCreatePattern(
+  args: Record<string, unknown>,
+  gestaoId: number,
+  userPrompt?: string | null,
+): Promise<Record<string, unknown>> {
+  const descricao = typeof args.descricao === "string" ? args.descricao : "";
+  const referenceText = `${userPrompt ?? ""} ${descricao}`.trim();
+
+  if (!referenceText || !wantsHistoricalPattern(referenceText)) {
+    return args;
+  }
+
+  const searchText = extractHistoricalSearchText(referenceText);
+
+  if (!searchText) {
+    return args;
+  }
+
+  const valor = typeof args.valor === "number" ? args.valor : Number(args.valor);
+  const rows = await searchLancamentos({
+    gestaoId,
+    tipo: searchTipo(args.tipo),
+    text: searchText,
+    order: "desc",
+  });
+  const historical =
+    rows.find((row) => Number.isFinite(valor) && Math.abs(Number(row.valor_total) - valor) < 0.005) ??
+    rows[0];
+
+  if (!historical) {
+    return args;
+  }
+
+  const tipo =
+    historical.tipo === "receita" || historical.tipo === "despesa"
+      ? historical.tipo
+      : args.tipo;
+  const hora = typeof args.hora === "string" ? args.hora : extractTimeFromText(referenceText) ?? undefined;
+
+  return {
+    ...args,
+    descricao: historical.descricao,
+    tipo,
+    contaId: historical.conta_id,
+    categoriaId: historical.categoria_id ?? args.categoriaId,
+    meio: historical.meio ?? args.meio,
+    ...(hora ? { hora } : {}),
+  };
+}
+
 /** Agrupamentos SQL não filtram por transferência — remove o campo nesse caso. */
 function filtersForSummarizeQueries(
   base: SearchLancamentosInput,
 ): SearchLancamentosInput & { tipo?: "receita" | "despesa" | "ajuste" } {
   if (base.tipo === "transferencia") {
-    const { tipo: _omit, ...rest } = base;
+    const { tipo, ...rest } = base;
+    void tipo;
     return rest;
   }
   return base as SearchLancamentosInput & { tipo?: "receita" | "despesa" | "ajuste" };
@@ -485,6 +591,7 @@ async function executeTool(
   args: Record<string, unknown>,
   gestaoId: number,
   userId: number,
+  userPrompt?: string | null,
 ): Promise<string> {
   try {
     switch (name) {
@@ -560,6 +667,8 @@ async function executeTool(
       }
 
       case "criar_lancamento": {
+        args = await applyHistoricalCreatePattern(args, gestaoId, userPrompt);
+
         const confirmar = Boolean(args.confirmar);
         const hoje = new Date().toISOString().slice(0, 10);
 
@@ -569,6 +678,7 @@ async function executeTool(
         const contaId = typeof args.contaId === "number" ? args.contaId : NaN;
         const categoriaId = typeof args.categoriaId === "number" ? args.categoriaId : NaN;
         const data = typeof args.data === "string" ? args.data : hoje;
+        const hora = typeof args.hora === "string" ? args.hora : undefined;
         const meioRaw = typeof args.meio === "string" ? args.meio : "pix";
         const meio = meioRaw as LancamentoMeio;
 
@@ -579,6 +689,7 @@ async function executeTool(
           contaId,
           categoriaId,
           data,
+          hora,
           meio,
         };
 
@@ -599,6 +710,23 @@ async function executeTool(
           return JSON.stringify({ erro: "Sem permissao para criar lancamentos nesta gestao." });
         }
 
+        // Idempotência: se já existe um lançamento "gêmeo" criado nos últimos 2 minutos,
+        // devolve o id existente em vez de inserir de novo. Cobre dois cenários do bug
+        // de duplicidade: (a) o modelo chama `criar_lancamento` com confirmar:true no
+        // mesmo turno do rascunho; (b) o usuário clica "Confirmar e salvar" depois.
+        const existingId = await findRecentDuplicateLancamentoId({
+          gestaoId,
+          contaId,
+          valorTotal: valor,
+          descricao,
+          competenciaData: data,
+          segundos: 120,
+        });
+
+        if (existingId != null) {
+          return JSON.stringify({ status: "ja_existente", lancamentoId: existingId });
+        }
+
         const insertId = await createLancamento({
           gestaoId,
           userId,
@@ -610,6 +738,7 @@ async function executeTool(
           meio,
           valorTotal: valor,
           competenciaData: data,
+          competenciaHora: hora,
         });
 
         return JSON.stringify({ status: "criado", lancamentoId: insertId });
@@ -746,6 +875,8 @@ async function callGroqWithTools(
   const systemPrompt = buildSystemPrompt(gestaoId, hoje);
 
   const history: Message[] = [...messages];
+  const latestUserPrompt =
+    [...messages].reverse().find((message) => message.role === "user")?.content ?? null;
   const MAX_ROUNDS = 8;
   const MAX_HTTP_ATTEMPTS = 4;
 
@@ -836,7 +967,13 @@ async function callGroqWithTools(
 
       for (const toolCall of toolCalls) {
         const toolArgs = parseToolArguments(toolCall.function.arguments);
-        const toolResult = await executeTool(toolCall.function.name, toolArgs, gestaoId, userId);
+        const toolResult = await executeTool(
+          toolCall.function.name,
+          toolArgs,
+          gestaoId,
+          userId,
+          latestUserPrompt,
+        );
         mergeToolArtifactsFromResult(toolCall.function.name, toolResult, artifacts);
 
         history.push({

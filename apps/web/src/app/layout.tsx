@@ -3,6 +3,7 @@ import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
 
 import { GlobalAssistant } from "@/components/assistant/global-assistant";
 import type { GestaoOption } from "@/components/assistant/global-assistant";
+import { ScrollPreserver } from "@/components/ui/scroll-preserver";
 import { auth } from "@/lib/server/auth";
 import { listCategorias, listContas, listUserGestoes } from "@/lib/server/repository";
 
@@ -74,6 +75,7 @@ export default async function RootLayout({
       className={`${heading.variable} ${body.variable} ${mono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col" suppressHydrationWarning>
+        <ScrollPreserver />
         {children}
         {session?.user?.id ? <GlobalAssistant gestoes={assistantGestoes} /> : null}
       </body>

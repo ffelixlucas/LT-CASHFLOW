@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DateInput } from "@/components/ui/date-input";
+import { preserveScrollPosition, restorePreservedScrollPosition } from "@/lib/client/scroll-preservation";
 
 type SpeechRecognitionResultLike = {
   readonly isFinal: boolean;
@@ -160,6 +161,7 @@ type ToolDraftSuggestion = {
   contaId: number;
   categoriaId: number;
   data: string;
+  hora?: string;
   meio: string;
 };
 
@@ -328,6 +330,13 @@ export function GlobalAssistant({
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const scrollPositionRef = useRef(0);
+
+  function refreshPreservingScroll() {
+    preserveScrollPosition();
+    router.refresh();
+    setTimeout(restorePreservedScrollPosition, 120);
+    setTimeout(restorePreservedScrollPosition, 360);
+  }
 
   useEffect(() => {
     const storedGestao = localStorage.getItem(GESTAO_KEY);
@@ -684,7 +693,7 @@ export function GlobalAssistant({
         },
       ]);
 
-      router.refresh();
+      refreshPreservingScroll();
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -743,7 +752,7 @@ export function GlobalAssistant({
         },
       ]);
 
-      router.refresh();
+      refreshPreservingScroll();
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -794,7 +803,7 @@ export function GlobalAssistant({
         },
       ]);
 
-      router.refresh();
+      refreshPreservingScroll();
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -845,7 +854,7 @@ export function GlobalAssistant({
         },
       ]);
 
-      router.refresh();
+      refreshPreservingScroll();
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -896,7 +905,7 @@ export function GlobalAssistant({
         },
       ]);
 
-      router.refresh();
+      refreshPreservingScroll();
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -949,7 +958,7 @@ export function GlobalAssistant({
         },
       ]);
 
-      router.refresh();
+      refreshPreservingScroll();
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -1007,7 +1016,7 @@ export function GlobalAssistant({
         },
       ]);
 
-      router.refresh();
+      refreshPreservingScroll();
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -1065,7 +1074,7 @@ export function GlobalAssistant({
         },
       ]);
 
-      router.refresh();
+      refreshPreservingScroll();
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -1092,13 +1101,24 @@ export function GlobalAssistant({
     setLoading(true);
 
     try {
-      const response = await fetch("/api/assistant", {
+      const response = await fetch("/api/ai/quick-add/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: `Confirmar e salvar o lançamento: ${draft.descricao}, R$ ${draft.valor}, tipo ${draft.tipo}, conta ${draft.contaId}, categoria ${draft.categoriaId}, data ${draft.data}, meio ${draft.meio}. Use criar_lancamento com confirmar: true.`,
           gestaoId: selectedGestaoId,
-          history: [],
+          suggestion: {
+            descricao: draft.descricao,
+            valorTotal: draft.valor,
+            tipo: draft.tipo,
+            status: "liquidado",
+            meio: draft.meio,
+            contaId: draft.contaId,
+            categoriaId: draft.categoriaId,
+            competenciaData: draft.data,
+            competenciaHora: draft.hora,
+            confianca: 0.95,
+            motivo: "Rascunho confirmado pelo usuario a partir do assistente.",
+          },
         }),
       });
 
@@ -1113,13 +1133,13 @@ export function GlobalAssistant({
         {
           id: messageId(),
           role: "assistant",
-          text: data.answer ?? "Lancamento salvo com sucesso.",
-          provider: data.provider ?? "groq",
+          text: data.ok ? "Lancamento salvo com sucesso. Atualizei a base da gestao." : "Lancamento salvo.",
+          provider: "info",
           kind: "info" as const,
         },
       ]);
 
-      router.refresh();
+      refreshPreservingScroll();
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -1178,7 +1198,7 @@ export function GlobalAssistant({
         },
       ]);
 
-      router.refresh();
+      refreshPreservingScroll();
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -1200,7 +1220,7 @@ export function GlobalAssistant({
       <button
         aria-expanded={open}
         aria-label={open ? "Fechar assistente de IA" : "Abrir assistente de IA"}
-        className="fixed right-3 bottom-3 z-[60] flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-foreground text-white shadow-[0_12px_40px_rgba(30,42,47,0.28)] ring-2 ring-white/15 transition-transform hover:scale-[1.04] active:scale-[0.98] sm:right-5 sm:bottom-5 sm:h-[3.75rem] sm:w-[3.75rem] lg:right-6"
+        className="fixed right-4 bottom-24 z-[60] flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-foreground text-white shadow-[0_12px_40px_rgba(30,42,47,0.28)] ring-2 ring-white/15 transition-transform hover:scale-[1.04] active:scale-[0.98] sm:right-6 sm:bottom-28 sm:h-[3.75rem] sm:w-[3.75rem]"
         onClick={() => setOpen((current) => !current)}
         title={open ? "Fechar assistente" : "Assistente IA"}
         type="button"
@@ -1315,6 +1335,11 @@ export function GlobalAssistant({
                             <p>
                               <strong>Data:</strong> {draft.data}
                             </p>
+                            {draft.hora ? (
+                              <p>
+                                <strong>Hora:</strong> {draft.hora}
+                              </p>
+                            ) : null}
                             <p>
                               <strong>Meio:</strong> {draft.meio}
                             </p>
