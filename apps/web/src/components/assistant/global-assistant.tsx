@@ -613,11 +613,34 @@ export function GlobalAssistant({
   }
 
   function startQuickAddEditing(message: AssistantMessage) {
-    if (message.role !== "assistant" || message.kind !== "quick_add" || !message.suggestion) {
+    if (
+      message.role !== "assistant" ||
+      (message.kind !== "quick_add" && message.kind !== "quick_add_tool") ||
+      !message.suggestion
+    ) {
       return;
     }
 
     setEditingQuickAddMessageId(message.id);
+
+    if (message.kind === "quick_add_tool") {
+      const draft = message.suggestion as ToolDraftSuggestion;
+      setEditingQuickAddSuggestion({
+        descricao: draft.descricao,
+        tipo: draft.tipo,
+        status: "liquidado",
+        meio: draft.meio as QuickAddSuggestion["meio"],
+        valorTotal: draft.valor,
+        competenciaData: draft.data,
+        competenciaHora: draft.hora,
+        contaId: draft.contaId,
+        categoriaId: draft.categoriaId,
+        confianca: 0.95,
+        motivo: "Rascunho editado pelo usuario.",
+      });
+      return;
+    }
+
     setEditingQuickAddSuggestion(message.suggestion as QuickAddSuggestion);
   }
 
@@ -629,7 +652,7 @@ export function GlobalAssistant({
   function saveQuickAddEditing(message: AssistantMessage) {
     if (
       message.role !== "assistant" ||
-      message.kind !== "quick_add" ||
+      (message.kind !== "quick_add" && message.kind !== "quick_add_tool") ||
       !editingQuickAddSuggestion ||
       editingQuickAddMessageId !== message.id
     ) {
@@ -641,7 +664,22 @@ export function GlobalAssistant({
         item.id === message.id
           ? {
               ...item,
-              suggestion: editingQuickAddSuggestion,
+              suggestion:
+                message.kind === "quick_add_tool"
+                  ? {
+                      descricao: editingQuickAddSuggestion.descricao,
+                      valor: editingQuickAddSuggestion.valorTotal,
+                      tipo:
+                        editingQuickAddSuggestion.tipo === "receita" || editingQuickAddSuggestion.tipo === "despesa"
+                          ? editingQuickAddSuggestion.tipo
+                          : "despesa",
+                      contaId: editingQuickAddSuggestion.contaId,
+                      categoriaId: editingQuickAddSuggestion.categoriaId,
+                      data: editingQuickAddSuggestion.competenciaData,
+                      hora: editingQuickAddSuggestion.competenciaHora,
+                      meio: editingQuickAddSuggestion.meio ?? "outro",
+                    }
+                  : editingQuickAddSuggestion,
             }
           : item,
       ),
@@ -1550,46 +1588,172 @@ export function GlobalAssistant({
                     <div className="mt-4 space-y-2 rounded-2xl bg-surface px-3 py-3 text-sm">
                       {(() => {
                         const draft = message.suggestion as ToolDraftSuggestion;
+                        const isEditing =
+                          editingQuickAddMessageId === message.id && editingQuickAddSuggestion;
                         const contaNome = selectedGestaoContas.find((conta) => conta.id === draft.contaId)?.nome ?? `#${draft.contaId}`;
                         const categoriaNome =
                           selectedGestaoCategorias.find((categoria) => categoria.id === draft.categoriaId)?.nome ??
                           `#${draft.categoriaId}`;
                         return (
                           <>
-                            <p className="break-words">
-                              <strong>Descricao:</strong> {draft.descricao}
-                            </p>
-                            <p>
-                              <strong>Valor:</strong> {money(draft.valor)}
-                            </p>
-                            <p>
-                              <strong>Tipo:</strong> {draft.tipo}
-                            </p>
-                            <p>
-                              <strong>Conta:</strong> {contaNome}
-                            </p>
-                            <p>
-                              <strong>Categoria:</strong> {categoriaNome}
-                            </p>
-                            <p>
-                              <strong>Data:</strong> {draft.data}
-                            </p>
-                            {draft.hora ? (
-                              <p>
-                                <strong>Hora:</strong> {draft.hora}
-                              </p>
-                            ) : null}
-                            <p>
-                              <strong>Meio:</strong> {draft.meio}
-                            </p>
-                            <button
-                              className="mt-2 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                              disabled={loading}
-                              onClick={() => confirmToolQuickAdd(message)}
-                              type="button"
-                            >
-                              Confirmar e salvar
-                            </button>
+                            {isEditing ? (
+                              <div className="space-y-3">
+                                <input
+                                  className="w-full rounded-2xl border border-line bg-background px-4 py-3"
+                                  onChange={(event) =>
+                                    setEditingQuickAddSuggestion((current) =>
+                                      current ? { ...current, descricao: event.currentTarget.value } : current,
+                                    )
+                                  }
+                                  type="text"
+                                  value={editingQuickAddSuggestion.descricao}
+                                />
+                                <div className="grid gap-2 sm:grid-cols-2">
+                                  <input
+                                    className="w-full rounded-2xl border border-line bg-background px-4 py-3"
+                                    min="0.01"
+                                    onChange={(event) =>
+                                      setEditingQuickAddSuggestion((current) =>
+                                        current ? { ...current, valorTotal: Number(event.currentTarget.value || 0) } : current,
+                                      )
+                                    }
+                                    step="0.01"
+                                    type="number"
+                                    value={editingQuickAddSuggestion.valorTotal}
+                                  />
+                                  <select
+                                    className="w-full rounded-2xl border border-line bg-background px-4 py-3"
+                                    onChange={(event) =>
+                                      setEditingQuickAddSuggestion((current) =>
+                                        current
+                                          ? { ...current, meio: event.currentTarget.value as QuickAddSuggestion["meio"] }
+                                          : current,
+                                      )
+                                    }
+                                    value={editingQuickAddSuggestion.meio ?? "outro"}
+                                  >
+                                    <option value="pix">PIX</option>
+                                    <option value="debito">Debito</option>
+                                    <option value="credito">Credito</option>
+                                    <option value="dinheiro">Dinheiro</option>
+                                    <option value="ted_doc">TED/DOC</option>
+                                    <option value="transferencia">Transferencia</option>
+                                    <option value="outro">Outro</option>
+                                  </select>
+                                  <DateInput
+                                    className="rounded-2xl border border-line bg-background px-4 py-3"
+                                    onValueChange={(value) =>
+                                      setEditingQuickAddSuggestion((current) =>
+                                        current ? { ...current, competenciaData: value } : current,
+                                      )
+                                    }
+                                    value={editingQuickAddSuggestion.competenciaData}
+                                  />
+                                  <input
+                                    className="w-full rounded-2xl border border-line bg-background px-4 py-3"
+                                    onChange={(event) =>
+                                      setEditingQuickAddSuggestion((current) =>
+                                        current ? { ...current, competenciaHora: event.currentTarget.value || undefined } : current,
+                                      )
+                                    }
+                                    type="time"
+                                    value={editingQuickAddSuggestion.competenciaHora ?? ""}
+                                  />
+                                  <select
+                                    className="w-full rounded-2xl border border-line bg-background px-4 py-3"
+                                    onChange={(event) =>
+                                      setEditingQuickAddSuggestion((current) =>
+                                        current ? { ...current, contaId: Number(event.currentTarget.value) } : current,
+                                      )
+                                    }
+                                    value={String(editingQuickAddSuggestion.contaId)}
+                                  >
+                                    {selectedGestaoContas.map((conta) => (
+                                      <option key={conta.id} value={conta.id}>
+                                        {conta.nome}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <select
+                                    className="w-full rounded-2xl border border-line bg-background px-4 py-3"
+                                    onChange={(event) =>
+                                      setEditingQuickAddSuggestion((current) =>
+                                        current ? { ...current, categoriaId: Number(event.currentTarget.value) } : current,
+                                      )
+                                    }
+                                    value={String(editingQuickAddSuggestion.categoriaId)}
+                                  >
+                                    {selectedGestaoCategorias.map((categoria) => (
+                                      <option key={categoria.id} value={categoria.id}>
+                                        {categoria.nome}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div className="flex flex-wrap gap-2 pt-1">
+                                  <button
+                                    className="rounded-full border border-line bg-background px-4 py-2 text-sm font-medium text-foreground"
+                                    onClick={cancelQuickAddEditing}
+                                    type="button"
+                                  >
+                                    Cancelar
+                                  </button>
+                                  <button
+                                    className="rounded-full bg-foreground px-4 py-2 text-sm font-semibold text-white"
+                                    onClick={() => saveQuickAddEditing(message)}
+                                    type="button"
+                                  >
+                                    Salvar rascunho
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <p className="break-words">
+                                  <strong>Descricao:</strong> {draft.descricao}
+                                </p>
+                                <p>
+                                  <strong>Valor:</strong> {money(draft.valor)}
+                                </p>
+                                <p>
+                                  <strong>Tipo:</strong> {draft.tipo}
+                                </p>
+                                <p>
+                                  <strong>Conta:</strong> {contaNome}
+                                </p>
+                                <p>
+                                  <strong>Categoria:</strong> {categoriaNome}
+                                </p>
+                                <p>
+                                  <strong>Data:</strong> {draft.data}
+                                </p>
+                                {draft.hora ? (
+                                  <p>
+                                    <strong>Hora:</strong> {draft.hora}
+                                  </p>
+                                ) : null}
+                                <p>
+                                  <strong>Meio:</strong> {draft.meio}
+                                </p>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  <button
+                                    className="rounded-full border border-line bg-background px-4 py-2 text-sm font-medium text-foreground"
+                                    onClick={() => startQuickAddEditing(message)}
+                                    type="button"
+                                  >
+                                    Editar rascunho
+                                  </button>
+                                  <button
+                                    className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                                    disabled={loading}
+                                    onClick={() => confirmToolQuickAdd(message)}
+                                    type="button"
+                                  >
+                                    Confirmar e salvar
+                                  </button>
+                                </div>
+                              </>
+                            )}
                           </>
                         );
                       })()}

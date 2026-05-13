@@ -49,6 +49,40 @@ function normalizeText(value: string) {
     .toLowerCase();
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function parseSuggestion(value: unknown) {
+  const single = quickAddSuggestionSchema.safeParse(value);
+
+  if (single.success) {
+    return single;
+  }
+
+  const raw = asRecord(value);
+  if (!raw) {
+    return single;
+  }
+
+  const toolDraft = {
+    descricao: raw.descricao,
+    valorTotal: raw.valorTotal ?? raw.valor,
+    tipo: raw.tipo,
+    status: raw.status ?? "liquidado",
+    meio: raw.meio,
+    contaId: raw.contaId,
+    categoriaId: raw.categoriaId,
+    competenciaData: raw.competenciaData ?? raw.data,
+    competenciaHora: raw.competenciaHora ?? raw.hora,
+    vencimentoData: raw.vencimentoData,
+    confianca: raw.confianca ?? 0.95,
+    motivo: raw.motivo ?? "Rascunho confirmado pelo usuario a partir do assistente.",
+  };
+
+  return quickAddSuggestionSchema.safeParse(toolDraft);
+}
+
 async function normalizeQuickAddSuggestion(gestaoId: number, suggestion: QuickAddSuggestion): Promise<QuickAddSuggestion> {
   if (suggestion.tipo === "transferencia") {
     return suggestion;
@@ -188,7 +222,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Sem acesso a essa gestao." }, { status: 403 });
   }
 
-  const single = quickAddSuggestionSchema.safeParse(body.suggestion);
+  const single = parseSuggestion(body.suggestion);
 
   if (single.success) {
     const suggestion = withDefaultCurrentTime(single.data);
@@ -230,7 +264,7 @@ export async function POST(request: Request) {
   const batch = quickAddBatchSuggestionSchema.safeParse(body.suggestion);
 
   if (!batch.success) {
-    return NextResponse.json({ error: "Sugestao invalida." }, { status: 400 });
+    return NextResponse.json({ error: "Sugestao invalida.", details: single.error.flatten() }, { status: 400 });
   }
 
   const ids: number[] = [];
