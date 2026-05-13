@@ -248,6 +248,27 @@ function meioLabel(meio: UpdateLancamentosSuggestion["meio"]) {
   return meio;
 }
 
+function extractTimeFromText(text: string) {
+  const match = text.match(/\b(?:as|às|pra|para)?\s*([01]?\d|2[0-3])[:h]([0-5]\d)\b/i);
+
+  if (!match?.[1] || !match[2]) {
+    return null;
+  }
+
+  return `${String(Number(match[1])).padStart(2, "0")}:${match[2]}`;
+}
+
+function looksLikeDraftTimeEdit(text: string) {
+  const normalized = text
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+
+  return /\b(ajusta|ajuste|muda|mude|altera|altere|corrige|corrija|troca|troque)\b/.test(normalized) &&
+    /\b(hora|horario)\b/.test(normalized) &&
+    Boolean(extractTimeFromText(text));
+}
+
 const HISTORY_KEY = "ltcashflow-assistant-history";
 const GESTAO_KEY = "ltcashflow-assistant-gestao";
 
@@ -543,6 +564,53 @@ export function GlobalAssistant({
     cancelQuickAddEditing();
   }
 
+  function applyDraftTimeEdit(rawPrompt: string, userMessage: AssistantMessage) {
+    const nextTime = extractTimeFromText(rawPrompt);
+
+    if (!nextTime || !looksLikeDraftTimeEdit(rawPrompt)) {
+      return false;
+    }
+
+    const lastDraft = [...messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.role === "assistant" &&
+          (message.kind === "quick_add" || message.kind === "quick_add_tool") &&
+          Boolean(message.suggestion),
+      );
+
+    if (!lastDraft || lastDraft.role !== "assistant" || !lastDraft.suggestion) {
+      return false;
+    }
+
+    const updatedSuggestion =
+      lastDraft.kind === "quick_add_tool"
+        ? {
+            ...(lastDraft.suggestion as ToolDraftSuggestion),
+            hora: nextTime,
+          }
+        : {
+            ...(lastDraft.suggestion as QuickAddSuggestion),
+            competenciaHora: nextTime,
+          };
+
+    const updatedDraft: AssistantMessage = {
+      ...lastDraft,
+      id: messageId(),
+      text: `Ajustei o horario do rascunho para ${nextTime}.`,
+      suggestion: updatedSuggestion,
+    };
+
+    setMessages((current) => [...current, userMessage, updatedDraft]);
+    setPrompt("");
+    setVoiceError(null);
+    setEditingQuickAddMessageId(null);
+    setEditingQuickAddSuggestion(null);
+
+    return true;
+  }
+
   async function handleSubmit() {
     if (!prompt.trim() || !selectedGestaoId) {
       return;
@@ -553,6 +621,10 @@ export function GlobalAssistant({
       role: "user",
       text: prompt.trim(),
     };
+
+    if (applyDraftTimeEdit(prompt.trim(), userMessage)) {
+      return;
+    }
 
     const previousAssistant = [...messages]
       .reverse()
@@ -1321,6 +1393,10 @@ export function GlobalAssistant({
                     <div className="mt-4 space-y-2 rounded-2xl bg-surface px-3 py-3 text-sm">
                       {(() => {
                         const draft = message.suggestion as ToolDraftSuggestion;
+                        const contaNome = selectedGestaoContas.find((conta) => conta.id === draft.contaId)?.nome ?? `#${draft.contaId}`;
+                        const categoriaNome =
+                          selectedGestaoCategorias.find((categoria) => categoria.id === draft.categoriaId)?.nome ??
+                          `#${draft.categoriaId}`;
                         return (
                           <>
                             <p className="break-words">
@@ -1331,6 +1407,12 @@ export function GlobalAssistant({
                             </p>
                             <p>
                               <strong>Tipo:</strong> {draft.tipo}
+                            </p>
+                            <p>
+                              <strong>Conta:</strong> {contaNome}
+                            </p>
+                            <p>
+                              <strong>Categoria:</strong> {categoriaNome}
                             </p>
                             <p>
                               <strong>Data:</strong> {draft.data}
@@ -1410,6 +1492,12 @@ export function GlobalAssistant({
                         const suggestion = message.suggestion as QuickAddSuggestion;
                         const isEditing =
                           editingQuickAddMessageId === message.id && editingQuickAddSuggestion;
+                        const contaNome =
+                          selectedGestaoContas.find((conta) => conta.id === suggestion.contaId)?.nome ??
+                          `#${suggestion.contaId}`;
+                        const categoriaNome =
+                          selectedGestaoCategorias.find((categoria) => categoria.id === suggestion.categoriaId)?.nome ??
+                          `#${suggestion.categoriaId}`;
 
                         return (
                           <>
@@ -1569,6 +1657,12 @@ export function GlobalAssistant({
                                 </p>
                                 <p>
                                   <strong>Valor:</strong> {money(suggestion.valorTotal)}
+                                </p>
+                                <p>
+                                  <strong>Conta:</strong> {contaNome}
+                                </p>
+                                <p>
+                                  <strong>Categoria:</strong> {categoriaNome}
                                 </p>
                                 <p>
                                   <strong>Data:</strong>{" "}

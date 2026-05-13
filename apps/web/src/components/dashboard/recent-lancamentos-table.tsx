@@ -520,13 +520,11 @@ export function RecentLancamentosTable({
     [lancamentos, selectedLancamentoId],
   );
 
-  const [editTipo, setEditTipo] = useState("despesa");
-
-  useEffect(() => {
-    if (selectedLancamento) {
-      setEditTipo(selectedLancamento.tipo);
-    }
-  }, [selectedLancamento?.id, selectedLancamento?.tipo]);
+  const [editTipoDraft, setEditTipoDraft] = useState<{ id: number; tipo: string } | null>(null);
+  const editTipo =
+    selectedLancamento && editTipoDraft?.id === selectedLancamento.id
+      ? editTipoDraft.tipo
+      : selectedLancamento?.tipo ?? "despesa";
 
   useEffect(() => {
     if (!selectedLancamento) {
@@ -609,10 +607,6 @@ export function RecentLancamentosTable({
       return searchable.includes(normalizedSearch);
     });
   }, [categoriaFilter, contaFilter, dateFrom, dateTo, lancamentos, meioFilter, search, statusFilter, tipoFilter]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [search, tipoFilter, statusFilter, meioFilter, contaFilter, categoriaFilter, periodFilter, dateFrom, dateTo]);
 
   const filteredSummary = useMemo(() => {
     // Para o resumo de fluxo "líquido", só contam eventos que tocam a conta corrente
@@ -1416,7 +1410,16 @@ export function RecentLancamentosTable({
 
               <select
                 className="rounded-2xl border border-line bg-background px-4 py-3"
-                onChange={(event) => setEditTipo(event.target.value)}
+                onChange={(event) =>
+                  setEditTipoDraft(
+                    selectedLancamento
+                      ? {
+                          id: selectedLancamento.id,
+                          tipo: event.target.value,
+                        }
+                      : null,
+                  )
+                }
                 value={editTipo}
               >
                 <option value="despesa">Despesa</option>
