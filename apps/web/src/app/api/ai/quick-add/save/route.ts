@@ -13,6 +13,8 @@ import {
   createLancamento,
   createTransferencia,
   findRecentDuplicateLancamentoId,
+  listCategorias,
+  listContas,
 } from "@/lib/server/repository";
 
 function formatDate(date: Date) {
@@ -40,12 +42,74 @@ function withDefaultCurrentTime<T extends { competenciaData: string; competencia
   };
 }
 
+function normalizeText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+}
+
+async function normalizeQuickAddSuggestion(gestaoId: number, suggestion: QuickAddSuggestion): Promise<QuickAddSuggestion> {
+  if (suggestion.tipo === "transferencia") {
+    return suggestion;
+  }
+
+  const [contas, categorias] = await Promise.all([listContas(gestaoId), listCategorias(gestaoId)]);
+  const currentConta = contas.find((conta) => conta.id === suggestion.contaId);
+  const currentCategoria = categorias.find((categoria) => categoria.id === suggestion.categoriaId);
+  const next: QuickAddSuggestion = { ...suggestion };
+
+  if (suggestion.tipo === "despesa" && suggestion.meio === "credito" && currentConta?.tipo !== "cartao_credito") {
+    const wantsLucas = currentConta ? /\blucas\b/.test(normalizeText(currentConta.nome)) : false;
+    const card =
+      contas.find((conta) => conta.tipo === "cartao_credito" && (!wantsLucas || /\blucas\b/.test(normalizeText(conta.nome)))) ??
+      contas.find((conta) => conta.tipo === "cartao_credito");
+
+    if (card) {
+      next.contaId = card.id;
+    }
+  }
+
+  const categoryNatureInvalid =
+    suggestion.tipo === "receita"
+      ? currentCategoria?.natureza === "despesa"
+      : suggestion.tipo === "despesa"
+        ? currentCategoria?.natureza === "receita"
+        : false;
+
+  if (!currentCategoria || categoryNatureInvalid) {
+    const referenceText = normalizeText(suggestion.descricao);
+    const desiredCategoryName =
+      suggestion.tipo === "receita"
+        ? "Renda"
+        : /\b(planta|moradia|casa|reforma|material de construcao|construcao)\b/.test(referenceText)
+          ? "Moradia"
+          : /\b(super\s*mercado|supermercado|mercado|feira|padaria|restaurante|ifood)\b/.test(referenceText)
+            ? "Alimentacao"
+            : "Outros";
+    const desired = categorias.find(
+      (categoria) =>
+        normalizeText(categoria.nome) === normalizeText(desiredCategoryName) &&
+        (categoria.natureza === suggestion.tipo || categoria.natureza === "ambos"),
+    );
+    const fallback = categorias.find(
+      (categoria) => categoria.natureza === suggestion.tipo || categoria.natureza === "ambos",
+    );
+
+    if (desired ?? fallback) {
+      next.categoriaId = (desired ?? fallback)?.id;
+    }
+  }
+
+  return next;
+}
+
 async function saveQuickAddSuggestion(input: {
   gestaoId: number;
   userId: number;
   suggestion: QuickAddSuggestion;
 }) {
-  const suggestion = withDefaultCurrentTime(input.suggestion);
+  const suggestion = withDefaultCurrentTime(await normalizeQuickAddSuggestion(input.gestaoId, input.suggestion));
 
   if (suggestion.tipo === "transferencia") {
     if (!suggestion.contaDestinoId) {

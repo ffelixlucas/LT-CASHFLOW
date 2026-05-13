@@ -574,6 +574,64 @@ async function applyHistoricalCreatePattern(
   };
 }
 
+async function normalizeCreateLancamentoArgs(
+  args: Record<string, unknown>,
+  gestaoId: number,
+  userPrompt?: string | null,
+): Promise<Record<string, unknown>> {
+  const tipo = args.tipo === "receita" || args.tipo === "despesa" ? args.tipo : null;
+  const meio = typeof args.meio === "string" ? args.meio : undefined;
+  const contaId = typeof args.contaId === "number" ? args.contaId : Number(args.contaId);
+  const categoriaId = typeof args.categoriaId === "number" ? args.categoriaId : Number(args.categoriaId);
+
+  const [contas, categorias] = await Promise.all([listContas(gestaoId), listCategorias(gestaoId)]);
+  const currentConta = contas.find((conta) => conta.id === contaId);
+  const currentCategoria = categorias.find((categoria) => categoria.id === categoriaId);
+  const referenceText = normalizeText(`${userPrompt ?? ""} ${String(args.descricao ?? "")}`);
+  const next = { ...args };
+
+  if (tipo === "despesa" && meio === "credito" && currentConta?.tipo !== "cartao_credito") {
+    const wantsLucas = currentConta ? /\blucas\b/.test(normalizeText(currentConta.nome)) : false;
+    const card =
+      contas.find((conta) => conta.tipo === "cartao_credito" && (!wantsLucas || /\blucas\b/.test(normalizeText(conta.nome)))) ??
+      contas.find((conta) => conta.tipo === "cartao_credito");
+
+    if (card) {
+      next.contaId = card.id;
+    }
+  }
+
+  const categoryNatureInvalid =
+    tipo === "receita"
+      ? currentCategoria?.natureza === "despesa"
+      : tipo === "despesa"
+        ? currentCategoria?.natureza === "receita"
+        : false;
+
+  if (tipo && (!currentCategoria || categoryNatureInvalid)) {
+    const desiredCategoryName =
+      tipo === "receita"
+        ? "Renda"
+        : /\b(planta|moradia|casa|reforma|material de construcao|construcao)\b/.test(referenceText)
+          ? "Moradia"
+          : /\b(super\s*mercado|supermercado|mercado|feira|padaria|restaurante|ifood)\b/.test(referenceText)
+            ? "Alimentacao"
+            : "Outros";
+    const desired = categorias.find(
+      (categoria) =>
+        normalizeText(categoria.nome) === normalizeText(desiredCategoryName) &&
+        (categoria.natureza === tipo || categoria.natureza === "ambos"),
+    );
+    const fallback = categorias.find((categoria) => categoria.natureza === tipo || categoria.natureza === "ambos");
+
+    if (desired ?? fallback) {
+      next.categoriaId = (desired ?? fallback)?.id;
+    }
+  }
+
+  return next;
+}
+
 /** Agrupamentos SQL não filtram por transferência — remove o campo nesse caso. */
 function filtersForSummarizeQueries(
   base: SearchLancamentosInput,
@@ -668,6 +726,7 @@ async function executeTool(
 
       case "criar_lancamento": {
         args = await applyHistoricalCreatePattern(args, gestaoId, userPrompt);
+        args = await normalizeCreateLancamentoArgs(args, gestaoId, userPrompt);
 
         const confirmar = Boolean(args.confirmar);
         const hoje = new Date().toISOString().slice(0, 10);
