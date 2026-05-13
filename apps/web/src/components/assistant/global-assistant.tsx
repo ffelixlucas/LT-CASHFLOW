@@ -44,10 +44,12 @@ export type GestaoOption = {
   contas: Array<{
     id: number;
     nome: string;
+    tipo?: string;
   }>;
   categorias: Array<{
     id: number;
     nome: string;
+    natureza?: "receita" | "despesa" | "ambos";
   }>;
 };
 
@@ -258,15 +260,98 @@ function extractTimeFromText(text: string) {
   return `${String(Number(match[1])).padStart(2, "0")}:${match[2]}`;
 }
 
-function looksLikeDraftTimeEdit(text: string) {
-  const normalized = text
+function normalizeAssistantText(text: string) {
+  return text
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
     .toLowerCase();
+}
+
+function looksLikeDraftTimeEdit(text: string) {
+  const normalized = normalizeAssistantText(text);
 
   return /\b(ajusta|ajuste|muda|mude|altera|altere|corrige|corrija|troca|troque)\b/.test(normalized) &&
     /\b(hora|horario)\b/.test(normalized) &&
     Boolean(extractTimeFromText(text));
+}
+
+function detectDraftMeioEdit(text: string): QuickAddSuggestion["meio"] | undefined {
+  const normalized = normalizeAssistantText(text);
+
+  if (/\bpix\b/.test(normalized)) return "pix";
+  if (/\b(cartao de credito|cartao credito|credito)\b/.test(normalized)) return "credito";
+  if (/\b(cartao de debito|cartao debito|debito)\b/.test(normalized)) return "debito";
+  if (/\b(dinheiro|especie)\b/.test(normalized)) return "dinheiro";
+  if (/\b(ted|doc)\b/.test(normalized)) return "ted_doc";
+  if (/\btransferencia\b/.test(normalized)) return "transferencia";
+
+  return undefined;
+}
+
+function findDraftCategoryEdit(
+  text: string,
+  categorias: GestaoOption["categorias"],
+) {
+  const normalized = normalizeAssistantText(text);
+  const afterCategoria = normalized.match(/\bcategoria\s+(.+?)(?:\s+(?:nao|não)\b|$)/)?.[1]?.trim();
+
+  if (afterCategoria) {
+    const direct = categorias.find((categoria) => {
+      const name = normalizeAssistantText(categoria.nome);
+      return afterCategoria.includes(name) || name.includes(afterCategoria);
+    });
+
+    if (direct) {
+      return direct;
+    }
+  }
+
+  return categorias.find((categoria) => {
+    const name = normalizeAssistantText(categoria.nome);
+    const index = normalized.indexOf(name);
+
+    if (index < 0) {
+      return false;
+    }
+
+    const before = normalized.slice(Math.max(0, index - 8), index);
+    return !/\bnao\s+$/.test(before) && !/\bn\s+$/.test(before);
+  }) ?? null;
+}
+
+function findDraftAccountEdit(
+  text: string,
+  contas: GestaoOption["contas"],
+  currentContaId?: number,
+) {
+  const normalized = normalizeAssistantText(text);
+  const currentConta = contas.find((conta) => conta.id === currentContaId);
+  const wantsLucas = currentConta ? /\blucas\b/.test(normalizeAssistantText(currentConta.nome)) : false;
+
+  const byName = contas.find((conta) => normalized.includes(normalizeAssistantText(conta.nome)));
+  if (byName) {
+    return byName;
+  }
+
+  if (/\b(cartao de credito|cartao credito|credito)\b/.test(normalized)) {
+    return (
+      contas.find((conta) => conta.tipo === "cartao_credito" && (!wantsLucas || /\blucas\b/.test(normalizeAssistantText(conta.nome)))) ??
+      contas.find((conta) => conta.tipo === "cartao_credito") ??
+      null
+    );
+  }
+
+  return null;
+}
+
+function isDraftFieldEdit(text: string) {
+  const normalized = normalizeAssistantText(text);
+
+  return (
+    /\b(categoria|conta|cartao|credito|debito|pix|meio)\b/.test(normalized) ||
+    /\b(ta|esta|ficou)\s+(errado|errada)\b/.test(normalized) ||
+    /\b(nao|não)\b/.test(normalized)
+  );
 }
 
 const HISTORY_KEY = "ltcashflow-assistant-history";
@@ -611,6 +696,74 @@ export function GlobalAssistant({
     return true;
   }
 
+  function applyDraftFieldEdit(rawPrompt: string, userMessage: AssistantMessage) {
+    if (!isDraftFieldEdit(rawPrompt)) {
+      return false;
+    }
+
+    const lastDraft = [...messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.role === "assistant" &&
+          (message.kind === "quick_add" || message.kind === "quick_add_tool") &&
+          Boolean(message.suggestion),
+      );
+
+    if (!lastDraft || lastDraft.role !== "assistant" || !lastDraft.suggestion) {
+      return false;
+    }
+
+    const selectedCategory = findDraftCategoryEdit(rawPrompt, selectedGestaoCategorias);
+    const nextMeio = detectDraftMeioEdit(rawPrompt);
+    const currentContaId =
+      lastDraft.kind === "quick_add_tool"
+        ? (lastDraft.suggestion as ToolDraftSuggestion).contaId
+        : (lastDraft.suggestion as QuickAddSuggestion).contaId;
+    const selectedAccount = findDraftAccountEdit(rawPrompt, selectedGestaoContas, currentContaId);
+
+    if (!selectedCategory && !nextMeio && !selectedAccount) {
+      return false;
+    }
+
+    const updatedSuggestion =
+      lastDraft.kind === "quick_add_tool"
+        ? {
+            ...(lastDraft.suggestion as ToolDraftSuggestion),
+            ...(selectedCategory ? { categoriaId: selectedCategory.id } : {}),
+            ...(selectedAccount ? { contaId: selectedAccount.id } : {}),
+            ...(nextMeio ? { meio: nextMeio } : {}),
+          }
+        : {
+            ...(lastDraft.suggestion as QuickAddSuggestion),
+            ...(selectedCategory ? { categoriaId: selectedCategory.id } : {}),
+            ...(selectedAccount ? { contaId: selectedAccount.id } : {}),
+            ...(nextMeio ? { meio: nextMeio } : {}),
+            motivo: "Rascunho ajustado pela correcao do usuario.",
+          };
+
+    const changes = [
+      selectedCategory ? `categoria ${selectedCategory.nome}` : null,
+      selectedAccount ? `conta ${selectedAccount.nome}` : null,
+      nextMeio ? `meio ${meioLabel(nextMeio)}` : null,
+    ].filter(Boolean);
+
+    const updatedDraft: AssistantMessage = {
+      ...lastDraft,
+      id: messageId(),
+      text: `Ajustei o rascunho: ${changes.join(", ")}.`,
+      suggestion: updatedSuggestion,
+    };
+
+    setMessages((current) => [...current, userMessage, updatedDraft]);
+    setPrompt("");
+    setVoiceError(null);
+    setEditingQuickAddMessageId(null);
+    setEditingQuickAddSuggestion(null);
+
+    return true;
+  }
+
   async function handleSubmit() {
     if (!prompt.trim() || !selectedGestaoId) {
       return;
@@ -623,6 +776,10 @@ export function GlobalAssistant({
     };
 
     if (applyDraftTimeEdit(prompt.trim(), userMessage)) {
+      return;
+    }
+
+    if (applyDraftFieldEdit(prompt.trim(), userMessage)) {
       return;
     }
 

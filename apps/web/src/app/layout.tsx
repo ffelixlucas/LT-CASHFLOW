@@ -19,8 +19,8 @@ async function gestoesForAssistant(userId: number): Promise<GestaoOption[]> {
       return {
         id: g.id,
         nome: g.nome,
-        contas: contas.map((c) => ({ id: c.id, nome: c.nome })),
-        categorias: categorias.map((c) => ({ id: c.id, nome: c.nome })),
+        contas: contas.map((c) => ({ id: c.id, nome: c.nome, tipo: c.tipo })),
+        categorias: categorias.map((c) => ({ id: c.id, nome: c.nome, natureza: c.natureza })),
       };
     }),
   );
