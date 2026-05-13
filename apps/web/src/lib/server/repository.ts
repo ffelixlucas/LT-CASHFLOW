@@ -722,7 +722,7 @@ export async function listContas(gestaoId: number) {
         tipo,
         instituicao,
         COALESCE(saldo_inicial, 0) AS saldo_inicial,
-        DATE_FORMAT(saldo_inicial_em, '%Y-%m-%d') AS saldo_inicial_em,
+        NULL AS saldo_inicial_em,
         limite_credito,
         fechamento_dia,
         vencimento_dia
@@ -898,12 +898,12 @@ export async function updateContaSaldoInicial(input: {
   const [result] = await pool.query<ResultSetHeader>(
     `
       UPDATE contas
-      SET saldo_inicial = ?, saldo_inicial_em = ?
+      SET saldo_inicial = ?
       WHERE id = ?
         AND gestao_id = ?
         AND ativa = 1
     `,
-    [input.saldoInicial, input.saldoInicialEm ?? null, input.contaId, input.gestaoId],
+    [input.saldoInicial, input.contaId, input.gestaoId],
   );
 
   if (result.affectedRows > 0) {
@@ -1666,22 +1666,7 @@ export async function getGestaoPeriodoResumo(input: {
     [input.gestaoId, input.dateFrom, input.dateTo],
   );
 
-  const [openingRows] = await pool.query<RowDataPacket[]>(
-    `
-      SELECT
-        COALESCE(SUM(CASE WHEN ct.saldo_inicial >= 0 THEN ct.saldo_inicial ELSE 0 END), 0) AS receitas,
-        COALESCE(SUM(CASE WHEN ct.saldo_inicial < 0 THEN -ct.saldo_inicial ELSE 0 END), 0) AS despesas,
-        COALESCE(SUM(ct.saldo_inicial), 0) AS total
-      FROM contas ct
-      WHERE ct.gestao_id = ?
-        AND ct.ativa = 1
-        AND ct.saldo_inicial_em >= ?
-        AND ct.saldo_inicial_em <= ?
-    `,
-    [input.gestaoId, input.dateFrom, input.dateTo],
-  );
-
-  const opening = openingRows[0] ?? { receitas: "0", despesas: "0", total: "0" };
+  const opening = { receitas: "0", despesas: "0", total: "0" };
   const base = rows[0] ?? {
     receitas: "0",
     despesas: "0",
