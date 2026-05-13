@@ -281,19 +281,8 @@ const CASE_SAIDA_DA_CONTA_AGREGADA = `
 `;
 
 async function syncGestaoInicioEm(connection: PoolConnection, gestaoId: number) {
-  await connection.query(
-    `
-      UPDATE gestoes g
-      SET g.inicio_em = (
-        SELECT MIN(l.competencia_data)
-        FROM lancamentos l
-        WHERE l.gestao_id = g.id
-          AND l.status <> 'cancelado'
-      )
-      WHERE g.id = ?
-    `,
-    [gestaoId],
-  );
+  void connection;
+  void gestaoId;
 }
 
 export async function findUserByEmail(email: string) {
@@ -343,7 +332,14 @@ export async function createUser(input: {
 export async function listUserGestoes(userId: number) {
   const [rows] = await pool.query<GestaoRow[]>(
     `
-      SELECT g.id, g.nome, g.descricao, g.tipo, g.inicio_em, g.percentual_reserva, gm.papel
+      SELECT
+        g.id,
+        g.nome,
+        g.descricao,
+        g.tipo,
+        NULL AS inicio_em,
+        10 AS percentual_reserva,
+        gm.papel
       FROM gestoes g
       INNER JOIN gestao_membros gm
         ON gm.gestao_id = g.id
@@ -527,12 +523,12 @@ export async function createGestaoWithDefaults(input: {
   try {
     await connection.beginTransaction();
 
-  const [gestaoResult] = await connection.query<ResultSetHeader>(
+    const [gestaoResult] = await connection.query<ResultSetHeader>(
       `
-        INSERT INTO gestoes (nome, descricao, tipo, inicio_em, percentual_reserva, criado_por_usuario_id)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO gestoes (nome, descricao, tipo, criado_por_usuario_id)
+        VALUES (?, ?, ?, ?)
       `,
-      [input.nome, input.descricao ?? null, input.tipo, input.inicioEm ?? null, 10, input.userId],
+      [input.nome, input.descricao ?? null, input.tipo, input.userId],
     );
 
     const gestaoId = gestaoResult.insertId;
@@ -619,10 +615,10 @@ export async function createGestaoWithOpeningBalances(input: {
 
     const [gestaoResult] = await connection.query<ResultSetHeader>(
       `
-        INSERT INTO gestoes (nome, descricao, tipo, inicio_em, percentual_reserva, criado_por_usuario_id)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO gestoes (nome, descricao, tipo, criado_por_usuario_id)
+        VALUES (?, ?, ?, ?)
       `,
-      [input.nome, input.descricao ?? null, input.tipo, input.inicioEm ?? null, 10, input.userId],
+      [input.nome, input.descricao ?? null, input.tipo, input.userId],
     );
 
     const gestaoId = gestaoResult.insertId;
@@ -889,29 +885,8 @@ export async function updateGestaoPercentualReserva(input: {
   userId: number;
   percentualReserva: number;
 }) {
-  const [result] = await pool.query<ResultSetHeader>(
-    `
-      UPDATE gestoes
-      SET percentual_reserva = ?
-      WHERE id = ?
-        AND status = 'ativa'
-    `,
-    [input.percentualReserva, input.gestaoId],
-  );
-
-  if (result.affectedRows > 0) {
-    await registerAudit({
-      userId: input.userId,
-      gestaoId: input.gestaoId,
-      action: "update",
-      module: "gestoes",
-      entity: "gestao",
-      entityId: input.gestaoId,
-      details: { percentualReserva: input.percentualReserva },
-    });
-  }
-
-  return result.affectedRows > 0;
+  void input;
+  return false;
 }
 
 export async function updateContaSaldoInicial(input: {
