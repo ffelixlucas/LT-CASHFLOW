@@ -1546,9 +1546,11 @@ export function RecentLancamentosTable({
               />
 
               <div className="flex flex-wrap justify-end gap-3 lg:col-span-2">
-                <form
-                  action={deleteLancamentoAction}
-                  onSubmit={(event) => {
+                <button
+                  className="rounded-full border border-line bg-background px-5 py-3 text-sm font-semibold text-accent-strong"
+                  formAction={deleteLancamentoAction}
+                  formNoValidate
+                  onClick={(event) => {
                     const confirmed = window.confirm(
                       "Tem certeza que deseja excluir este lancamento? Essa acao nao pode ser desfeita.",
                     );
@@ -1556,16 +1558,10 @@ export function RecentLancamentosTable({
                       event.preventDefault();
                     }
                   }}
+                  type="submit"
                 >
-                  <input name="gestaoId" type="hidden" value={gestaoId} />
-                  <input name="lancamentoId" type="hidden" value={selectedLancamento.id} />
-                  <button
-                    className="rounded-full border border-line bg-background px-5 py-3 text-sm font-semibold text-accent-strong"
-                    type="submit"
-                  >
-                    Excluir
-                  </button>
-                </form>
+                  Excluir
+                </button>
                 <button
                   className="rounded-full border border-line px-5 py-3 text-sm font-semibold text-foreground"
                   onClick={() => setSelectedLancamentoId(null)}

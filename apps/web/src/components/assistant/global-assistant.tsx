@@ -1600,11 +1600,12 @@ export function GlobalAssistant({
                               <div className="space-y-3">
                                 <input
                                   className="w-full rounded-2xl border border-line bg-background px-4 py-3"
-                                  onChange={(event) =>
-                                    setEditingQuickAddSuggestion((current) =>
-                                      current ? { ...current, descricao: event.currentTarget.value } : current,
-                                    )
-                                  }
+                                    onChange={(event) => {
+                                      const value = event.currentTarget.value;
+                                      setEditingQuickAddSuggestion((current) =>
+                                        current ? { ...current, descricao: value } : current,
+                                      );
+                                    }}
                                   type="text"
                                   value={editingQuickAddSuggestion.descricao}
                                 />
@@ -1612,24 +1613,24 @@ export function GlobalAssistant({
                                   <input
                                     className="w-full rounded-2xl border border-line bg-background px-4 py-3"
                                     min="0.01"
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                      const value = Number(event.currentTarget.value || 0);
                                       setEditingQuickAddSuggestion((current) =>
-                                        current ? { ...current, valorTotal: Number(event.currentTarget.value || 0) } : current,
-                                      )
-                                    }
+                                        current ? { ...current, valorTotal: value } : current,
+                                      );
+                                    }}
                                     step="0.01"
                                     type="number"
                                     value={editingQuickAddSuggestion.valorTotal}
                                   />
                                   <select
                                     className="w-full rounded-2xl border border-line bg-background px-4 py-3"
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                      const value = event.currentTarget.value as QuickAddSuggestion["meio"];
                                       setEditingQuickAddSuggestion((current) =>
-                                        current
-                                          ? { ...current, meio: event.currentTarget.value as QuickAddSuggestion["meio"] }
-                                          : current,
-                                      )
-                                    }
+                                        current ? { ...current, meio: value } : current,
+                                      );
+                                    }}
                                     value={editingQuickAddSuggestion.meio ?? "outro"}
                                   >
                                     <option value="pix">PIX</option>
@@ -1651,21 +1652,23 @@ export function GlobalAssistant({
                                   />
                                   <input
                                     className="w-full rounded-2xl border border-line bg-background px-4 py-3"
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                      const value = event.currentTarget.value || undefined;
                                       setEditingQuickAddSuggestion((current) =>
-                                        current ? { ...current, competenciaHora: event.currentTarget.value || undefined } : current,
-                                      )
-                                    }
+                                        current ? { ...current, competenciaHora: value } : current,
+                                      );
+                                    }}
                                     type="time"
                                     value={editingQuickAddSuggestion.competenciaHora ?? ""}
                                   />
                                   <select
                                     className="w-full rounded-2xl border border-line bg-background px-4 py-3"
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                      const value = Number(event.currentTarget.value);
                                       setEditingQuickAddSuggestion((current) =>
-                                        current ? { ...current, contaId: Number(event.currentTarget.value) } : current,
-                                      )
-                                    }
+                                        current ? { ...current, contaId: value } : current,
+                                      );
+                                    }}
                                     value={String(editingQuickAddSuggestion.contaId)}
                                   >
                                     {selectedGestaoContas.map((conta) => (
@@ -1676,11 +1679,12 @@ export function GlobalAssistant({
                                   </select>
                                   <select
                                     className="w-full rounded-2xl border border-line bg-background px-4 py-3"
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                      const value = Number(event.currentTarget.value);
                                       setEditingQuickAddSuggestion((current) =>
-                                        current ? { ...current, categoriaId: Number(event.currentTarget.value) } : current,
-                                      )
-                                    }
+                                        current ? { ...current, categoriaId: value } : current,
+                                      );
+                                    }}
                                     value={String(editingQuickAddSuggestion.categoriaId)}
                                   >
                                     {selectedGestaoCategorias.map((categoria) => (
@@ -1826,16 +1830,12 @@ export function GlobalAssistant({
                               <div className="space-y-3">
                                 <input
                                   className="w-full rounded-2xl border border-line bg-background px-4 py-3"
-                                  onChange={(event) =>
+                                  onChange={(event) => {
+                                    const value = event.currentTarget.value;
                                     setEditingQuickAddSuggestion((current) =>
-                                      current
-                                        ? {
-                                            ...current,
-                                            descricao: event.currentTarget.value,
-                                          }
-                                        : current,
-                                    )
-                                  }
+                                      current ? { ...current, descricao: value } : current,
+                                    );
+                                  }}
                                   type="text"
                                   value={editingQuickAddSuggestion.descricao}
                                 />
@@ -1844,32 +1844,24 @@ export function GlobalAssistant({
                                   <input
                                     className="w-full rounded-2xl border border-line bg-background px-4 py-3"
                                     min="0.01"
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                      const value = Number(event.currentTarget.value || 0);
                                       setEditingQuickAddSuggestion((current) =>
-                                        current
-                                          ? {
-                                              ...current,
-                                              valorTotal: Number(event.currentTarget.value || 0),
-                                            }
-                                          : current,
-                                      )
-                                    }
+                                        current ? { ...current, valorTotal: value } : current,
+                                      );
+                                    }}
                                     step="0.01"
                                     type="number"
                                     value={editingQuickAddSuggestion.valorTotal}
                                   />
                                   <select
                                     className="w-full rounded-2xl border border-line bg-background px-4 py-3"
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                      const value = (event.currentTarget.value || undefined) as QuickAddSuggestion["meio"];
                                       setEditingQuickAddSuggestion((current) =>
-                                        current
-                                          ? {
-                                              ...current,
-                                              meio: (event.currentTarget.value || undefined) as QuickAddSuggestion["meio"],
-                                            }
-                                          : current,
-                                      )
-                                    }
+                                        current ? { ...current, meio: value } : current,
+                                      );
+                                    }}
                                     value={editingQuickAddSuggestion.meio ?? ""}
                                   >
                                     <option value="">Meio nao informado</option>
@@ -1898,32 +1890,24 @@ export function GlobalAssistant({
                                   />
                                   <input
                                     className="w-full rounded-2xl border border-line bg-background px-4 py-3"
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                      const value = event.currentTarget.value || undefined;
                                       setEditingQuickAddSuggestion((current) =>
-                                        current
-                                          ? {
-                                              ...current,
-                                              competenciaHora: event.currentTarget.value || undefined,
-                                            }
-                                          : current,
-                                      )
-                                    }
+                                        current ? { ...current, competenciaHora: value } : current,
+                                      );
+                                    }}
                                     type="time"
                                     value={editingQuickAddSuggestion.competenciaHora ?? ""}
                                   />
 
                                   <select
                                     className="w-full rounded-2xl border border-line bg-background px-4 py-3"
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                      const value = Number(event.currentTarget.value);
                                       setEditingQuickAddSuggestion((current) =>
-                                        current
-                                          ? {
-                                              ...current,
-                                              contaId: Number(event.currentTarget.value),
-                                            }
-                                          : current,
-                                      )
-                                    }
+                                        current ? { ...current, contaId: value } : current,
+                                      );
+                                    }}
                                     value={String(editingQuickAddSuggestion.contaId)}
                                   >
                                     {selectedGestaoContas.map((conta) => (
@@ -1934,16 +1918,12 @@ export function GlobalAssistant({
                                   </select>
                                   <select
                                     className="w-full rounded-2xl border border-line bg-background px-4 py-3"
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                      const value = Number(event.currentTarget.value);
                                       setEditingQuickAddSuggestion((current) =>
-                                        current
-                                          ? {
-                                              ...current,
-                                              categoriaId: Number(event.currentTarget.value),
-                                            }
-                                          : current,
-                                      )
-                                    }
+                                        current ? { ...current, categoriaId: value } : current,
+                                      );
+                                    }}
                                     value={String(editingQuickAddSuggestion.categoriaId)}
                                   >
                                     {selectedGestaoCategorias.map((categoria) => (

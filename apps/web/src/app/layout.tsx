@@ -72,6 +72,7 @@ export default async function RootLayout({
   return (
     <html
       lang="pt-BR"
+      data-scroll-behavior="smooth"
       className={`${heading.variable} ${body.variable} ${mono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col" suppressHydrationWarning>

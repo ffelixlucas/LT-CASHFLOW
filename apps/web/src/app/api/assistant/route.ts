@@ -62,23 +62,23 @@ const TOOLS = [
             description: "Tipo do lançamento. Omita para buscar todos.",
           },
           categoriaId: {
-            type: "number",
+            type: ["number", "null"],
             description: "ID da categoria. Use listar_categorias primeiro para obter o ID.",
           },
           contaId: {
-            type: "number",
+            type: ["number", "null"],
             description: "ID da conta. Use listar_contas primeiro para obter o ID.",
           },
           dataInicio: {
-            type: "string",
+            type: ["string", "null"],
             description: "Data inicial no formato YYYY-MM-DD.",
           },
           dataFim: {
-            type: "string",
+            type: ["string", "null"],
             description: "Data final no formato YYYY-MM-DD.",
           },
           descricao: {
-            type: "string",
+            type: ["string", "null"],
             description: "Texto para busca na descrição do lançamento (ou categoria/conta relacionada).",
           },
           ordem: {
@@ -87,7 +87,7 @@ const TOOLS = [
             description: "Ordem dos resultados. Use asc para primeiro/mais antigo e desc para ultimo/mais recente.",
           },
           limite: {
-            type: "number",
+            type: ["number", "string", "null"],
             description: "Quantidade máxima de resultados retornados ao modelo. Padrão: 20 (máx. 50).",
           },
         },
@@ -110,20 +110,20 @@ const TOOLS = [
             description: "Como agrupar os resultados.",
           },
           tipo: {
-            type: "string",
+            type: ["string", "null"],
             enum: ["receita", "despesa", "transferencia", "ajuste"],
             description: "Tipo do lançamento. Omita para todos.",
           },
           dataInicio: {
-            type: "string",
+            type: ["string", "null"],
             description: "Data inicial YYYY-MM-DD.",
           },
           dataFim: {
-            type: "string",
+            type: ["string", "null"],
             description: "Data final YYYY-MM-DD.",
           },
           contaId: {
-            type: "number",
+            type: ["number", "null"],
             description: "Filtrar por conta.",
           },
         },
@@ -203,11 +203,11 @@ const TOOLS = [
             description: "Tipo do lançamento.",
           },
           contaId: {
-            type: "number",
+            type: ["number", "null"],
             description: "ID da conta.",
           },
           categoriaId: {
-            type: "number",
+            type: ["number", "null"],
             description: "ID da categoria.",
           },
           data: {
@@ -215,7 +215,7 @@ const TOOLS = [
             description: "Data no formato YYYY-MM-DD. Padrão: hoje.",
           },
           hora: {
-            type: "string",
+            type: ["string", "null"],
             description: "Hora no formato HH:mm quando o usuario informar horario.",
           },
           meio: {
@@ -495,6 +495,11 @@ function extractTimeFromText(value: string) {
   return `${String(Number(match[1])).padStart(2, "0")}:${match[2]}`;
 }
 
+function currentTimeHHmm() {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+}
+
 function wantsHistoricalPattern(value: string) {
   const normalized = normalizeText(value);
 
@@ -598,6 +603,26 @@ async function normalizeCreateLancamentoArgs(
 
     if (card) {
       next.contaId = card.id;
+    }
+  }
+
+  if (!currentConta && (tipo === "receita" || tipo === "despesa")) {
+    const wantsLucas = /\blucas\b/.test(referenceText);
+    const defaultConta =
+      contas.find(
+        (conta) =>
+          conta.tipo !== "cartao_credito" &&
+          (!wantsLucas || /\blucas\b/.test(normalizeText(conta.nome))) &&
+          (conta.tipo === "corrente" || conta.tipo === "carteira" || conta.tipo === "caixa" || conta.tipo === "outro"),
+      ) ??
+      contas.find(
+        (conta) =>
+          conta.tipo !== "cartao_credito" &&
+          (conta.tipo === "corrente" || conta.tipo === "carteira" || conta.tipo === "caixa" || conta.tipo === "outro"),
+      );
+
+    if (defaultConta) {
+      next.contaId = defaultConta.id;
     }
   }
 
@@ -737,7 +762,7 @@ async function executeTool(
         const contaId = typeof args.contaId === "number" ? args.contaId : NaN;
         const categoriaId = typeof args.categoriaId === "number" ? args.categoriaId : NaN;
         const data = typeof args.data === "string" ? args.data : hoje;
-        const hora = typeof args.hora === "string" ? args.hora : undefined;
+        const hora = typeof args.hora === "string" && args.hora ? args.hora : data === hoje ? currentTimeHHmm() : undefined;
         const meioRaw = typeof args.meio === "string" ? args.meio : "pix";
         const meio = meioRaw as LancamentoMeio;
 
