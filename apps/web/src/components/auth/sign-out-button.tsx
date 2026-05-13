@@ -6,7 +6,10 @@ export function SignOutButton() {
   return (
     <button
       className="rounded-full border border-line px-4 py-2 text-sm font-medium"
-      onClick={() => signOut({ callbackUrl: "/entrar" })}
+      onClick={async () => {
+        await signOut({ redirect: false });
+        window.location.assign("/entrar");
+      }}
       type="button"
     >
       Sair
