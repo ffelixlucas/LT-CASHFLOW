@@ -96,6 +96,7 @@ export type SearchLancamentosInput = {
   maxValor?: number;
   dateFrom?: string;
   dateTo?: string;
+  dateField?: "competencia" | "fatura";
   order?: "asc" | "desc";
 };
 
@@ -234,6 +235,8 @@ const ORDER_BY_LANCAMENTO_RECIENTE_DESC =
   "l.competencia_data DESC, COALESCE(l.competencia_hora, TIME(l.criado_em)) DESC, l.criado_em DESC";
 const ORDER_BY_LANCAMENTO_RECIENTE_ASC =
   "l.competencia_data ASC, COALESCE(l.competencia_hora, TIME(l.criado_em)) ASC, l.criado_em ASC";
+const ORDER_BY_LANCAMENTO_FATURA_ASC =
+  "COALESCE(l.fatura_competencia_data, l.competencia_data) ASC, l.competencia_data ASC, COALESCE(l.competencia_hora, TIME(l.criado_em)) ASC, l.criado_em ASC";
 
 /** Inclui lançamentos em que a conta aparece como origem ou destino (transferências). */
 const JOIN_LANCAMENTOS_NA_CONTA =
@@ -1981,6 +1984,10 @@ export async function updateLancamento(input: {
 function buildLancamentoFilters(filters: SearchLancamentosInput): SqlFilters {
   const conditions = ["l.gestao_id = ?"];
   const params: Array<string | number> = [filters.gestaoId];
+  const dateExpression =
+    filters.dateField === "fatura"
+      ? "COALESCE(l.fatura_competencia_data, l.competencia_data)"
+      : "l.competencia_data";
 
   if (filters.text) {
     conditions.push(
@@ -2022,12 +2029,12 @@ function buildLancamentoFilters(filters: SearchLancamentosInput): SqlFilters {
   }
 
   if (filters.dateFrom) {
-    conditions.push("l.competencia_data >= ?");
+    conditions.push(`${dateExpression} >= ?`);
     params.push(filters.dateFrom);
   }
 
   if (filters.dateTo) {
-    conditions.push("l.competencia_data <= ?");
+    conditions.push(`${dateExpression} <= ?`);
     params.push(filters.dateTo);
   }
 
@@ -2081,14 +2088,18 @@ export async function listLancamentosForContaRange(input: {
   contaId: number;
   dateFrom?: string;
   dateTo?: string;
+  dateField?: "competencia" | "fatura";
 }) {
   const filters: SearchLancamentosInput = {
     gestaoId: input.gestaoId,
     contaId: input.contaId,
     dateFrom: input.dateFrom,
     dateTo: input.dateTo,
+    dateField: input.dateField,
   };
   const { conditions, params } = buildLancamentoFilters(filters);
+  const orderBy =
+    input.dateField === "fatura" ? ORDER_BY_LANCAMENTO_FATURA_ASC : ORDER_BY_LANCAMENTO_RECIENTE_ASC;
 
   const [rows] = await pool.query<LancamentoRow[]>(
     `
@@ -2104,6 +2115,7 @@ export async function listLancamentosForContaRange(input: {
         l.descricao,
         l.valor_total,
         DATE_FORMAT(l.competencia_data, '%Y-%m-%d') AS competencia_data,
+        DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-%d') AS fatura_competencia_data,
         TIME_FORMAT(l.competencia_hora, '%H:%i') AS competencia_hora,
         DATE_FORMAT(l.vencimento_data, '%Y-%m-%d') AS vencimento_data,
         c.nome AS categoria_nome,
@@ -2118,7 +2130,7 @@ export async function listLancamentosForContaRange(input: {
       LEFT JOIN categorias c
         ON c.id = l.categoria_id
       WHERE ${conditions.join(" AND ")}
-      ORDER BY ${ORDER_BY_LANCAMENTO_RECIENTE_ASC}
+      ORDER BY ${orderBy}
     `,
     params,
   );
@@ -2600,6 +2612,76 @@ export async function countSimilarLancamentosRecent(input: {
   );
 
   return Number(rows[0]?.c ?? 0);
+}
+
+export async function findRecentDuplicateLancamentoId(input: {
+  gestaoId: number;
+  contaId: number;
+  valorTotal: number;
+  descricao: string;
+  competenciaData: string;
+  segundos?: number;
+}): Promise<number | null> {
+  const segundos = input.segundos ?? 120;
+
+  const [rows] = await pool.query<Array<RowDataPacket & { id: number }>>(
+    `
+      SELECT id
+      FROM lancamentos
+      WHERE gestao_id = ?
+        AND conta_id = ?
+        AND status <> 'cancelado'
+        AND tipo <> 'transferencia'
+        AND ABS(valor_total - ?) < 0.009
+        AND LOWER(TRIM(descricao)) = LOWER(TRIM(?))
+        AND competencia_data = ?
+        AND criado_em >= DATE_SUB(NOW(), INTERVAL ? SECOND)
+      ORDER BY id DESC
+      LIMIT 1
+    `,
+    [
+      input.gestaoId,
+      input.contaId,
+      input.valorTotal,
+      input.descricao,
+      input.competenciaData,
+      segundos,
+    ],
+  );
+
+  return rows[0]?.id != null ? Number(rows[0].id) : null;
+}
+
+const SQL_PAGAMENTO_FATURA = `
+  (
+    l.descricao LIKE 'Pagamento efetuado - Fatura Cartão Inter%'
+    OR l.descricao LIKE 'Pagamento efetuado - Fatura Cartao Inter%'
+    OR l.descricao LIKE '%Fatura Cartão%'
+    OR l.descricao LIKE '%Fatura Cartao%'
+  )
+`;
+
+export async function getPagamentosFaturaParaCiclo(input: {
+  gestaoId: number;
+  faturaCompetenciaData: string;
+}): Promise<number> {
+  const [rows] = await pool.query<Array<RowDataPacket & { total: string | null }>>(
+    `
+      SELECT COALESCE(SUM(l.valor_total), 0) AS total
+      FROM lancamentos l
+      INNER JOIN contas ct ON ct.id = l.conta_id
+      WHERE l.gestao_id = ?
+        AND l.status <> 'cancelado'
+        AND l.tipo = 'despesa'
+        AND ct.tipo IN ('corrente', 'carteira', 'caixa', 'outro')
+        AND ${SQL_PAGAMENTO_FATURA}
+        AND l.competencia_data >= DATE_SUB(?, INTERVAL 7 DAY)
+        AND l.competencia_data <= DATE_ADD(?, INTERVAL 14 DAY)
+    `,
+    [input.gestaoId, input.faturaCompetenciaData, input.faturaCompetenciaData],
+  );
+
+  return Number(rows[0]?.total ?? 0);
 }
 
 export async function updateLancamentosMeio(input: {
