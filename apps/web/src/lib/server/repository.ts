@@ -281,6 +281,27 @@ const ORDER_BY_LANCAMENTO_FATURA_ASC =
 const SQL_L_DATA_RECORTE_GESTAO = "COALESCE(l.fatura_competencia_data, l.competencia_data)";
 const SQL_DATA_RECORTE_GESTAO = "COALESCE(fatura_competencia_data, competencia_data)";
 
+/**
+ * Previsto criado automaticamente pelo cadastro de gasto fixo.
+ * Não entra em totais de fluxo (mês/semana/categorias) para não somar em paralelo à despesa real
+ * nem duplicar o que já aparece no painel Contas fixas.
+ */
+function sqlLancamentoNaoEhPrevistoSinteticoGastoFixo(alias: string): string {
+  return `NOT (
+    ${alias}.tipo = 'despesa'
+    AND ${alias}.status = 'previsto'
+    AND JSON_UNQUOTE(JSON_EXTRACT(${alias}.metadados, '$.origem')) = 'gasto_fixo'
+  )`;
+}
+
+function sqlLancamentoNaoEhPrevistoSinteticoGastoFixoBare(): string {
+  return `NOT (
+    tipo = 'despesa'
+    AND status = 'previsto'
+    AND JSON_UNQUOTE(JSON_EXTRACT(metadados, '$.origem')) = 'gasto_fixo'
+  )`;
+}
+
 /** Inclui lançamentos em que a conta aparece como origem ou destino (transferências). */
 const JOIN_LANCAMENTOS_NA_CONTA =
   "LEFT JOIN lancamentos l ON (l.conta_id = ct.id OR l.conta_destino_id = ct.id)";
@@ -1395,7 +1416,9 @@ export async function ensureGastoFixoLancamentoMes(input: {
     return Number(existing[0].id);
   }
 
-  /** Despesa real já registrada no mês (ex.: veio de "Marcar fixo" sobre histórico): reutiliza em vez de criar outro previsto. */
+  /** Despesa já registrada no mês: reutiliza em vez de criar outro previsto sintético. */
+  const nomeAlvo = String(gasto.nome ?? "").trim();
+  const descAlvo = String(gasto.descricao ?? "").trim();
   const [alreadyInMonth] = await pool.query<Array<RowDataPacket & { id: number }>>(
     `
       SELECT l.id
@@ -1404,17 +1427,28 @@ export async function ensureGastoFixoLancamentoMes(input: {
         AND l.conta_id = ?
         AND l.categoria_id = ?
         AND l.tipo = 'despesa'
-        AND l.status IN ('pendente', 'liquidado')
+        AND l.status IN ('pendente', 'liquidado', 'previsto')
         AND DATE_FORMAT(${SQL_L_DATA_RECORTE_GESTAO}, '%Y-%m') = ?
         AND (
           l.metadados IS NULL
           OR COALESCE(JSON_UNQUOTE(JSON_EXTRACT(l.metadados, '$.gasto_fixo_id')), '') = ''
         )
-        AND LOWER(TRIM(l.descricao)) = LOWER(TRIM(?))
+        AND (
+          LOWER(TRIM(l.descricao)) = LOWER(?)
+          OR (NULLIF(?, '') IS NOT NULL AND LOWER(TRIM(l.descricao)) = LOWER(?))
+        )
       ORDER BY ${SQL_L_DATA_RECORTE_GESTAO} DESC, l.id DESC
       LIMIT 1
     `,
-    [input.gestaoId, gasto.conta_id, gasto.categoria_id, input.anoMes, gasto.nome],
+    [
+      input.gestaoId,
+      gasto.conta_id,
+      gasto.categoria_id,
+      input.anoMes,
+      nomeAlvo,
+      descAlvo,
+      descAlvo,
+    ],
   );
 
   const reuseId = alreadyInMonth[0]?.id;
@@ -1786,6 +1820,7 @@ export async function getSummary(gestaoId: number) {
         ) AS saldo
       FROM lancamentos
       WHERE gestao_id = ?
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixoBare()}
     `,
     [gestaoId],
   );
@@ -2184,6 +2219,7 @@ export async function listLancamentosPorPeriodo(input: {
         AND l.status <> 'cancelado'
         AND ${SQL_L_DATA_RECORTE_GESTAO} >= ?
         AND ${SQL_L_DATA_RECORTE_GESTAO} <= ?
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixo("l")}
       ORDER BY ${ORDER_BY_LANCAMENTO_FATURA_DESC}
     `,
     [input.gestaoId, input.dateFrom, input.dateTo],
@@ -2241,7 +2277,8 @@ export async function getGestaoPeriodoResumo(input: {
         AND l.status <> 'cancelado'
         AND ${SQL_L_DATA_RECORTE_GESTAO} >= ?
         AND ${SQL_L_DATA_RECORTE_GESTAO} <= ?
-      `,
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixo("l")}
+    `,
     [input.gestaoId, input.dateFrom, input.dateTo],
   );
 
@@ -2337,6 +2374,7 @@ export async function getContaCorrentePeriodoResumo(input: {
         AND l.status <> 'cancelado'
         AND l.competencia_data >= ?
         AND l.competencia_data <= ?
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixo("l")}
         AND (
           ct.tipo IN ('corrente', 'carteira', 'caixa', 'outro')
           OR (l.tipo = 'transferencia' AND ctd.tipo IN ('corrente', 'carteira', 'caixa', 'outro'))
@@ -2402,6 +2440,7 @@ export async function listGestaoMembrosResumo(input: {
         AND l.status <> 'cancelado'
         AND l.competencia_data >= ?
         AND l.competencia_data <= ?
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixo("l")}
       WHERE gm.gestao_id = ?
         AND gm.status = 'ativo'
       GROUP BY gm.usuario_id, u.nome, u.email, gm.papel, gm.status
@@ -2600,6 +2639,8 @@ function buildLancamentoFilters(filters: SearchLancamentosInput): SqlFilters {
     conditions.push(`${dateExpression} <= ?`);
     params.push(filters.dateTo);
   }
+
+  conditions.push(sqlLancamentoNaoEhPrevistoSinteticoGastoFixo("l"));
 
   return { conditions, params };
 }
@@ -2991,6 +3032,7 @@ export async function getGestaoInsights(gestaoId: number): Promise<GestaoInsight
       WHERE gestao_id = ?
         AND ${SQL_DATA_RECORTE_GESTAO} >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
         AND ${SQL_DATA_RECORTE_GESTAO} <= LAST_DAY(CURDATE())
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixoBare()}
     `,
     [gestaoId],
   );
@@ -3008,6 +3050,7 @@ export async function getGestaoInsights(gestaoId: number): Promise<GestaoInsight
       WHERE gestao_id = ?
         AND ${SQL_DATA_RECORTE_GESTAO} >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m-01')
         AND ${SQL_DATA_RECORTE_GESTAO} <= LAST_DAY(DATE_SUB(CURDATE(), INTERVAL 1 MONTH))
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixoBare()}
     `,
     [gestaoId],
   );
@@ -3021,6 +3064,7 @@ export async function getGestaoInsights(gestaoId: number): Promise<GestaoInsight
       WHERE gestao_id = ?
         AND ${SQL_DATA_RECORTE_GESTAO} >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
         AND ${SQL_DATA_RECORTE_GESTAO} <= CURDATE()
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixoBare()}
     `,
     [gestaoId],
   );
@@ -3042,6 +3086,7 @@ export async function getGestaoInsights(gestaoId: number): Promise<GestaoInsight
         AND l.status <> 'cancelado'
         AND ${SQL_L_DATA_RECORTE_GESTAO} >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
         AND ${SQL_L_DATA_RECORTE_GESTAO} <= LAST_DAY(CURDATE())
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixo("l")}
       GROUP BY c.id, c.nome
       ORDER BY total DESC
       LIMIT 5
@@ -3161,6 +3206,7 @@ export async function listGestaoFluxoUltimosMeses(
       WHERE l.gestao_id = ?
         AND ${SQL_L_DATA_RECORTE_GESTAO} >= ?
         AND ${SQL_L_DATA_RECORTE_GESTAO} <= ?
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixo("l")}
       GROUP BY DATE_FORMAT(${SQL_L_DATA_RECORTE_GESTAO}, '%Y-%m')
       ORDER BY ym ASC
     `,
@@ -3210,6 +3256,7 @@ export async function getGestaoInsightsParaMes(
       WHERE gestao_id = ?
         AND ${SQL_DATA_RECORTE_GESTAO} >= ?
         AND ${SQL_DATA_RECORTE_GESTAO} <= ?
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixoBare()}
     `,
     [gestaoId, from, to],
   );
@@ -3227,6 +3274,7 @@ export async function getGestaoInsightsParaMes(
       WHERE gestao_id = ?
         AND ${SQL_DATA_RECORTE_GESTAO} >= ?
         AND ${SQL_DATA_RECORTE_GESTAO} <= ?
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixoBare()}
     `,
     [gestaoId, prevFrom, prevTo],
   );
@@ -3240,6 +3288,7 @@ export async function getGestaoInsightsParaMes(
       WHERE gestao_id = ?
         AND ${SQL_DATA_RECORTE_GESTAO} >= ?
         AND ${SQL_DATA_RECORTE_GESTAO} <= ?
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixoBare()}
     `,
     [gestaoId, from, ateHojeEnd],
   );
@@ -3260,6 +3309,7 @@ export async function getGestaoInsightsParaMes(
         AND l.status <> 'cancelado'
         AND ${SQL_L_DATA_RECORTE_GESTAO} >= ?
         AND ${SQL_L_DATA_RECORTE_GESTAO} <= ?
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixo("l")}
       GROUP BY c.id, c.nome
       ORDER BY total DESC
       LIMIT 5
