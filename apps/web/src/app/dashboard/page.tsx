@@ -14,13 +14,11 @@ import {
   getContaCorrentePeriodoResumo,
   getGestaoInsights,
   getGestaoSaldosPorBucket,
-  ensureGastosFixosLancamentosMes,
+  fetchGastosFixosDashboardSlice,
   listCashAccountBreakdown,
   listCreditCardStatementData,
   listCategorias,
   listContas,
-  listGastoFixoSugestoes,
-  listGastosFixos,
   listLancamentosPorPeriodo,
   listUserGestoes,
 } from "@/lib/server/repository";
@@ -248,13 +246,11 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     dateTo: periodoAtual.to,
   });
   const cartoesComCiclo = await listCreditCardStatementData(gestaoAtiva.id);
-  await ensureGastosFixosLancamentosMes({
+  const { gastosFixos, sugestoesFixos } = await fetchGastosFixosDashboardSlice({
     gestaoId: gestaoAtiva.id,
     userId: user.id,
     anoMes: anoMesAtual,
   });
-  const gastosFixos = await listGastosFixos({ gestaoId: gestaoAtiva.id, anoMes: anoMesAtual });
-  const sugestoesFixos = await listGastoFixoSugestoes({ gestaoId: gestaoAtiva.id, anoMes: anoMesAtual });
   const baseRealFrom = gestaoAtiva.inicio_em
     ? new Date(gestaoAtiva.inicio_em).toISOString().slice(0, 10)
     : periodoAno.from;

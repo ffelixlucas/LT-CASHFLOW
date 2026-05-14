@@ -1618,6 +1618,40 @@ export async function listGastoFixoSugestoes(input: { gestaoId: number; anoMes: 
   return rows;
 }
 
+function isErNoSuchTableFor(error: unknown, table: string): boolean {
+  if (!error || typeof error !== "object") return false;
+  const e = error as { code?: string; errno?: number; sqlMessage?: string };
+  if (e.code !== "ER_NO_SUCH_TABLE" && e.errno !== 1146) return false;
+  return String(e.sqlMessage ?? "").includes(table);
+}
+
+/**
+ * Carrega bloco de gastos fixos no dashboard. Se a tabela ainda não existir no MySQL
+ * (migration pendente em produção), devolve listas vazias em vez de derrubar a página.
+ */
+export async function fetchGastosFixosDashboardSlice(input: {
+  gestaoId: number;
+  userId: number;
+  anoMes: string;
+}): Promise<{
+  gastosFixos: Awaited<ReturnType<typeof listGastosFixos>>;
+  sugestoesFixos: Awaited<ReturnType<typeof listGastoFixoSugestoes>>;
+}> {
+  try {
+    await ensureGastosFixosLancamentosMes(input);
+    const [gastosFixos, sugestoesFixos] = await Promise.all([
+      listGastosFixos({ gestaoId: input.gestaoId, anoMes: input.anoMes }),
+      listGastoFixoSugestoes({ gestaoId: input.gestaoId, anoMes: input.anoMes }),
+    ]);
+    return { gastosFixos, sugestoesFixos };
+  } catch (error) {
+    if (isErNoSuchTableFor(error, "gastos_fixos")) {
+      return { gastosFixos: [], sugestoesFixos: [] };
+    }
+    throw error;
+  }
+}
+
 export async function createTransferencia(input: {
   gestaoId: number;
   contaOrigemId: number;

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
+import { headers } from "next/headers";
 
 import { GlobalAssistant } from "@/components/assistant/global-assistant";
 import type { GestaoOption } from "@/components/assistant/global-assistant";
@@ -42,28 +43,56 @@ const body = Space_Grotesk({
   subsets: ["latin"],
 });
 
-export const metadata: Metadata = {
-  metadataBase: new URL("https://lt-cashflow.vercel.app"),
-  title: {
-    default: "LT CashFlow",
-    template: "%s | LT CashFlow",
-  },
-  icons: {
-    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
-    /** `apple-icon.tsx` gera PNG quadrado para iOS; não usar logo horizontal aqui. */
-  },
-  description:
-    "Gestao financeira compartilhada com foco em clareza, controle de caixa e colaboracao entre membros.",
-  openGraph: {
-    title: "LT CashFlow",
-    description:
-      "Gestao financeira compartilhada com foco em clareza, controle de caixa e colaboracao entre membros.",
-    type: "website",
-    locale: "pt_BR",
-    siteName: "LT CashFlow",
-    images: [{ url: "/brand/ltcashflow-logo-horizontal-1-tight.png", width: 1198, height: 319, alt: "LT CashFlow" }],
-  },
-};
+const SITE_DESCRIPTION =
+  "Gestao financeira compartilhada com foco em clareza, controle de caixa e colaboracao entre membros.";
+
+function resolveMetadataBase(): URL {
+  const fromEnv = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "");
+  if (fromEnv) {
+    return new URL(fromEnv);
+  }
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) {
+    return new URL(`https://${process.env.RAILWAY_PUBLIC_DOMAIN}`);
+  }
+  if (process.env.VERCEL_URL) {
+    return new URL(`https://${process.env.VERCEL_URL}`);
+  }
+  return new URL("https://lt-cashflow.vercel.app");
+}
+
+export async function generateMetadata(): Promise<Metadata> {
+  let metadataBase: URL;
+  try {
+    const h = await headers();
+    const hostRaw = h.get("x-forwarded-host") ?? h.get("host") ?? "";
+    const host = (hostRaw.split(",")[0] ?? "").trim();
+    const protoRaw = h.get("x-forwarded-proto") ?? "https";
+    const proto = (protoRaw.split(",")[0] ?? "https").trim() || "https";
+    metadataBase = host ? new URL(`${proto}://${host}`) : resolveMetadataBase();
+  } catch {
+    metadataBase = resolveMetadataBase();
+  }
+
+  return {
+    metadataBase,
+    title: {
+      default: "LT CashFlow",
+      template: "%s | LT CashFlow",
+    },
+    icons: {
+      icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+    },
+    description: SITE_DESCRIPTION,
+    openGraph: {
+      title: "LT CashFlow",
+      description: SITE_DESCRIPTION,
+      type: "website",
+      locale: "pt_BR",
+      siteName: "LT CashFlow",
+      images: [{ url: "/brand/ltcashflow-logo-horizontal-1-tight.png", width: 1198, height: 319, alt: "LT CashFlow" }],
+    },
+  };
+}
 
 export default async function RootLayout({
   children,
