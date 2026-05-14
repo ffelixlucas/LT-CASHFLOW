@@ -1395,6 +1395,49 @@ export async function ensureGastoFixoLancamentoMes(input: {
     return Number(existing[0].id);
   }
 
+  /** Despesa real já registrada no mês (ex.: veio de "Marcar fixo" sobre histórico): reutiliza em vez de criar outro previsto. */
+  const [alreadyInMonth] = await pool.query<Array<RowDataPacket & { id: number }>>(
+    `
+      SELECT l.id
+      FROM lancamentos l
+      WHERE l.gestao_id = ?
+        AND l.conta_id = ?
+        AND l.categoria_id = ?
+        AND l.tipo = 'despesa'
+        AND l.status IN ('pendente', 'liquidado')
+        AND DATE_FORMAT(${SQL_L_DATA_RECORTE_GESTAO}, '%Y-%m') = ?
+        AND (
+          l.metadados IS NULL
+          OR COALESCE(JSON_UNQUOTE(JSON_EXTRACT(l.metadados, '$.gasto_fixo_id')), '') = ''
+        )
+        AND LOWER(TRIM(l.descricao)) = LOWER(TRIM(?))
+      ORDER BY ${SQL_L_DATA_RECORTE_GESTAO} DESC, l.id DESC
+      LIMIT 1
+    `,
+    [input.gestaoId, gasto.conta_id, gasto.categoria_id, input.anoMes, gasto.nome],
+  );
+
+  const reuseId = alreadyInMonth[0]?.id;
+  if (reuseId) {
+    await pool.query(
+      `
+        UPDATE lancamentos
+        SET recorrente = 1,
+            metadados = ?
+        WHERE id = ?
+      `,
+      [
+        JSON.stringify({
+          gasto_fixo_id: input.gastoFixoId,
+          ano_mes: input.anoMes,
+          origem: "gasto_fixo_vinculo",
+        }),
+        reuseId,
+      ],
+    );
+    return Number(reuseId);
+  }
+
   const data = monthDateFromDay(input.anoMes, Number(gasto.dia_vencimento));
   const id = await createLancamento({
     gestaoId: input.gestaoId,
