@@ -335,6 +335,21 @@ function parseToolArguments(raw: string): Record<string, unknown> {
   return {};
 }
 
+function isExplicitMutationConfirmation(prompt?: string | null) {
+  if (!prompt) {
+    return false;
+  }
+
+  const normalized = prompt
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+
+  return /\b(confirmo|confirma|confirmar|pode salvar|salva|salvar|sim|ok|pode apagar|apaga mesmo|deleta mesmo|exclui mesmo)\b/.test(
+    normalized,
+  );
+}
+
 type AssistantToolDraft = {
   descricao: string;
   valor: number;
@@ -404,6 +419,11 @@ function mergeToolArtifactsFromResult(toolName: string, jsonStr: string, out: As
   }
 
   if (toolName === "criar_lancamento") {
+    if (o.status === "ja_existente") {
+      delete out.toolDraft;
+      return;
+    }
+
     if (o.status !== "rascunho") {
       return;
     }
@@ -753,7 +773,7 @@ async function executeTool(
         args = await applyHistoricalCreatePattern(args, gestaoId, userPrompt);
         args = await normalizeCreateLancamentoArgs(args, gestaoId, userPrompt);
 
-        const confirmar = Boolean(args.confirmar);
+        const confirmar = Boolean(args.confirmar) && isExplicitMutationConfirmation(userPrompt);
         const hoje = new Date().toISOString().slice(0, 10);
 
         const descricao = typeof args.descricao === "string" ? args.descricao : "";
@@ -804,6 +824,7 @@ async function executeTool(
           valorTotal: valor,
           descricao,
           competenciaData: data,
+          competenciaHora: hora,
           segundos: 120,
         });
 

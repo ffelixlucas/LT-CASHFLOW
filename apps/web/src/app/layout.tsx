@@ -48,6 +48,10 @@ export const metadata: Metadata = {
     default: "LT CashFlow",
     template: "%s | LT CashFlow",
   },
+  icons: {
+    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+    /** `apple-icon.tsx` gera PNG quadrado para iOS; não usar logo horizontal aqui. */
+  },
   description:
     "Gestao financeira compartilhada com foco em clareza, controle de caixa e colaboracao entre membros.",
   openGraph: {
@@ -57,6 +61,7 @@ export const metadata: Metadata = {
     type: "website",
     locale: "pt_BR",
     siteName: "LT CashFlow",
+    images: [{ url: "/brand/ltcashflow-logo-horizontal-1-tight.png", width: 1198, height: 319, alt: "LT CashFlow" }],
   },
 };
 

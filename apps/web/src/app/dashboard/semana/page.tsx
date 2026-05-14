@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { SignOutButton } from "@/components/auth/sign-out-button";
+import { DashboardAppNav } from "@/components/dashboard/dashboard-app-nav";
 import { requireUser } from "@/lib/server/auth";
 import {
   findFechamentoPeriodo,
@@ -225,12 +226,9 @@ export default async function FechamentoSemanaPage({ searchParams }: SemanaPageP
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Link
-                className="inline-flex items-center justify-center rounded-full border border-line bg-background px-3.5 py-2 text-sm font-medium text-foreground"
-                href={`/dashboard?gestao=${gestaoAtiva.id}`}
-              >
-                Dashboard
-              </Link>
+              <div className="flex flex-wrap items-center gap-2">
+                <DashboardAppNav active="semana" gestaoId={gestaoAtiva.id} />
+              </div>
               <SignOutButton />
             </div>
           </div>

@@ -125,7 +125,18 @@ function formatLocalIsoDate(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
+/** Data do mês de gestão (fatura no cartão, senão competência). */
+function dataRecorteMensalList(item: LancamentoItem) {
+  return item.fatura_competencia_data ?? item.competencia_data;
+}
+
 function compareLancamentosChrono(a: LancamentoItem, b: LancamentoItem) {
+  const da = dataRecorteMensalList(a);
+  const db = dataRecorteMensalList(b);
+  if (da !== db) {
+    return da.localeCompare(db);
+  }
+
   if (a.competencia_data !== b.competencia_data) {
     return a.competencia_data.localeCompare(b.competencia_data);
   }
@@ -579,11 +590,12 @@ export function RecentLancamentosTable({
         return false;
       }
 
-      if (normalizedDateFrom && item.competencia_data < normalizedDateFrom) {
+      const dataRecorteMensal = dataRecorteMensalList(item);
+      if (normalizedDateFrom && dataRecorteMensal < normalizedDateFrom) {
         return false;
       }
 
-      if (normalizedDateTo && item.competencia_data > normalizedDateTo) {
+      if (normalizedDateTo && dataRecorteMensal > normalizedDateTo) {
         return false;
       }
 
@@ -697,9 +709,9 @@ export function RecentLancamentosTable({
                 ? transferenciaSignedValue(item)
                 : 0;
 
-      if (!lastGroup || lastGroup.date !== item.competencia_data) {
+      if (!lastGroup || lastGroup.date !== dataRecorteMensalList(item)) {
         groups.push({
-          date: item.competencia_data,
+          date: dataRecorteMensalList(item),
           items: [item],
           saldo: itemSaldo,
           saldoFinal: saldoPorDia.get(item.competencia_data) ?? itemSaldo,
@@ -709,7 +721,7 @@ export function RecentLancamentosTable({
 
       lastGroup.items.push(item);
       lastGroup.saldo += itemSaldo;
-      lastGroup.saldoFinal = saldoPorDia.get(lastGroup.date) ?? lastGroup.saldo;
+      lastGroup.saldoFinal = saldoPorDia.get(item.competencia_data) ?? lastGroup.saldo;
     }
 
     return groups;

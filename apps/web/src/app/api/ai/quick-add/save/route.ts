@@ -142,7 +142,7 @@ async function saveQuickAddSuggestion(input: {
   gestaoId: number;
   userId: number;
   suggestion: QuickAddSuggestion;
-}) {
+}): Promise<{ id: number; duplicated: boolean }> {
   const suggestion = withDefaultCurrentTime(await normalizeQuickAddSuggestion(input.gestaoId, input.suggestion));
 
   if (suggestion.tipo === "transferencia") {
@@ -150,20 +150,20 @@ async function saveQuickAddSuggestion(input: {
       throw new Error("transferencia_sem_destino");
     }
 
-    const { contaDestinoId: _contaDestinoId, categoriaId: _categoriaId, ...transferSuggestion } = suggestion;
-
-    return createTransferencia({
+    const id = await createTransferencia({
       gestaoId: input.gestaoId,
       userId: input.userId,
-      contaOrigemId: transferSuggestion.contaId,
+      contaOrigemId: suggestion.contaId,
       contaDestinoId: suggestion.contaDestinoId,
-      status: transferSuggestion.status,
-      descricao: transferSuggestion.descricao,
-      valorTotal: transferSuggestion.valorTotal,
-      competenciaData: transferSuggestion.competenciaData,
-      competenciaHora: transferSuggestion.competenciaHora,
-      vencimentoData: transferSuggestion.vencimentoData,
+      status: suggestion.status,
+      descricao: suggestion.descricao,
+      valorTotal: suggestion.valorTotal,
+      competenciaData: suggestion.competenciaData,
+      competenciaHora: suggestion.competenciaHora,
+      vencimentoData: suggestion.vencimentoData,
     });
+
+    return { id, duplicated: false };
   }
 
   if (!suggestion.categoriaId) {
@@ -180,14 +180,15 @@ async function saveQuickAddSuggestion(input: {
     valorTotal: suggestion.valorTotal,
     descricao: suggestion.descricao,
     competenciaData: suggestion.competenciaData,
+    competenciaHora: suggestion.competenciaHora,
     segundos: 120,
   });
 
   if (duplicateId != null) {
-    return duplicateId;
+    return { id: duplicateId, duplicated: true };
   }
 
-  return createLancamento({
+  const id = await createLancamento({
     gestaoId: input.gestaoId,
     userId: input.userId,
     descricao: suggestion.descricao,
@@ -201,6 +202,8 @@ async function saveQuickAddSuggestion(input: {
     competenciaHora: suggestion.competenciaHora,
     vencimentoData: suggestion.vencimentoData,
   });
+
+  return { id, duplicated: false };
 }
 
 export async function POST(request: Request) {
@@ -234,9 +237,9 @@ export async function POST(request: Request) {
       dias: 30,
     });
 
-    let id: number;
+    let saved: { id: number; duplicated: boolean };
     try {
-      id = await saveQuickAddSuggestion({ gestaoId, userId, suggestion });
+      saved = await saveQuickAddSuggestion({ gestaoId, userId, suggestion });
     } catch (error) {
       if (error instanceof Error && error.message === "transferencia_sem_destino") {
         return NextResponse.json(
@@ -253,7 +256,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       ok: true,
-      id,
+      id: saved.id,
+      duplicated: saved.duplicated,
       avisoDuplicidade:
         semelhantes > 0
           ? `Ja existem ${semelhantes} lancamento(s) com o mesmo valor e descricao nos ultimos 30 dias na mesma origem. Confira antes de seguir.`
@@ -287,9 +291,9 @@ export async function POST(request: Request) {
       );
     }
 
-    let id: number;
+    let saved: { id: number; duplicated: boolean };
     try {
-      id = await saveQuickAddSuggestion({ gestaoId, userId, suggestion });
+      saved = await saveQuickAddSuggestion({ gestaoId, userId, suggestion });
     } catch (error) {
       if (error instanceof Error && error.message === "transferencia_sem_destino") {
         return NextResponse.json(
@@ -304,7 +308,7 @@ export async function POST(request: Request) {
       throw error;
     }
 
-    ids.push(id);
+    ids.push(saved.id);
   }
 
   return NextResponse.json({

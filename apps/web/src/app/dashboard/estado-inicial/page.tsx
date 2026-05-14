@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { SignOutButton } from "@/components/auth/sign-out-button";
+import { DashboardAppNav } from "@/components/dashboard/dashboard-app-nav";
 import { requireUser } from "@/lib/server/auth";
 import { formatDateForDisplay } from "@/lib/date";
 import { listContas, listUserGestoes } from "@/lib/server/repository";
@@ -59,9 +60,8 @@ export default async function EstadoInicialPage({ searchParams }: StatePageProps
           </p>
         </div>
         <div className="print-actions">
-          <Link className="tab" href={`/dashboard?gestao=${gestaoAtiva.id}`}>
-            Voltar ao dashboard
-          </Link>
+          <DashboardAppNav active={null} gestaoId={gestaoAtiva.id} />
+          <SignOutButton />
         </div>
       </header>
 

@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { LancamentoMeio } from "@ltcashflow/validation";
+import { addCalendarMonths } from "@/lib/date";
 import { pool } from "@ltcashflow/db";
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 
@@ -91,7 +92,7 @@ export type SearchLancamentosInput = {
   gestaoId: number;
   text?: string;
   tipo?: "receita" | "despesa" | "ajuste" | "transferencia";
-  meio?: "pix" | "debito" | "credito" | "dinheiro" | "ted_doc" | "transferencia" | "outro";
+  meio?: LancamentoMeio;
   contaId?: number;
   categoriaId?: number;
   minValor?: number;
@@ -174,6 +175,36 @@ export type CashAccountBreakdownRow = RowDataPacket & {
   quantidade_movimentos: number;
 };
 
+export type GastoFixoRow = RowDataPacket & {
+  id: number;
+  gestao_id: number;
+  conta_id: number;
+  categoria_id: number;
+  nome: string;
+  descricao: string | null;
+  valor_estimado: string;
+  dia_vencimento: number;
+  meio: LancamentoMeio | null;
+  status: "ativo" | "inativo";
+  conta_nome: string;
+  categoria_nome: string;
+  lancamento_mes_id: number | null;
+  lancamento_mes_status: "previsto" | "pendente" | "liquidado" | "cancelado" | null;
+};
+
+export type GastoFixoSugestaoRow = RowDataPacket & {
+  descricao: string;
+  conta_id: number;
+  categoria_id: number;
+  conta_nome: string;
+  categoria_nome: string;
+  meio: LancamentoMeio | null;
+  valor_medio: string;
+  meses: number;
+  ocorrencias: number;
+  ultimo_dia: number;
+};
+
 export type CreditCardAccountRow = RowDataPacket & {
   id: number;
   nome: string;
@@ -246,6 +277,10 @@ const ORDER_BY_LANCAMENTO_FATURA_DESC =
 const ORDER_BY_LANCAMENTO_FATURA_ASC =
   "COALESCE(l.fatura_competencia_data, l.competencia_data) ASC, COALESCE(l.competencia_hora, TIME(l.criado_em)) ASC, l.criado_em ASC";
 
+/** Mês / período na gestão: fatura do cartão (quando preenchida), senão competência (ex.: data do banco). */
+const SQL_L_DATA_RECORTE_GESTAO = "COALESCE(l.fatura_competencia_data, l.competencia_data)";
+const SQL_DATA_RECORTE_GESTAO = "COALESCE(fatura_competencia_data, competencia_data)";
+
 /** Inclui lançamentos em que a conta aparece como origem ou destino (transferências). */
 const JOIN_LANCAMENTOS_NA_CONTA =
   "LEFT JOIN lancamentos l ON (l.conta_id = ct.id OR l.conta_destino_id = ct.id)";
@@ -253,7 +288,7 @@ const JOIN_LANCAMENTOS_NA_CONTA =
 /** Variação de saldo por lançamento na conta `ct` após `JOIN_LANCAMENTOS_NA_CONTA`. */
 const CASE_DELTA_SALDO_NA_CONTA = `
   CASE
-    WHEN l.status = 'cancelado' THEN 0
+    WHEN l.status <> 'liquidado' THEN 0
     WHEN l.tipo = 'receita' THEN l.valor_total
     WHEN l.tipo = 'despesa' THEN -l.valor_total
     WHEN l.tipo = 'transferencia' AND l.conta_id = ct.id THEN -l.valor_total
@@ -264,7 +299,7 @@ const CASE_DELTA_SALDO_NA_CONTA = `
 
 const CASE_ENTRADA_NA_CONTA = `
   CASE
-    WHEN l.status = 'cancelado' THEN 0
+    WHEN l.status <> 'liquidado' THEN 0
     WHEN l.tipo = 'receita' THEN l.valor_total
     WHEN l.tipo = 'transferencia' AND l.conta_destino_id = ct.id THEN l.valor_total
     ELSE 0
@@ -273,7 +308,7 @@ const CASE_ENTRADA_NA_CONTA = `
 
 const CASE_DESPESA_SEM_SAIDA_CONTA = `
   CASE
-    WHEN l.status = 'cancelado' THEN 0
+    WHEN l.status <> 'liquidado' THEN 0
     WHEN l.tipo = 'despesa' AND COALESCE(c.nome, '') <> 'Saida da conta' THEN l.valor_total
     ELSE 0
   END
@@ -281,7 +316,7 @@ const CASE_DESPESA_SEM_SAIDA_CONTA = `
 
 const CASE_SAIDA_DA_CONTA_AGREGADA = `
   CASE
-    WHEN l.status = 'cancelado' THEN 0
+    WHEN l.status <> 'liquidado' THEN 0
     WHEN l.tipo = 'despesa' AND c.nome = 'Saida da conta' THEN l.valor_total
     WHEN l.tipo = 'transferencia' AND l.conta_id = ct.id THEN l.valor_total
     ELSE 0
@@ -739,7 +774,9 @@ export async function listContas(gestaoId: number) {
 }
 
 function compareLancamentosDesc(a: LancamentoListItem, b: LancamentoListItem) {
-  const dateDiff = b.competencia_data.localeCompare(a.competencia_data);
+  const da = a.fatura_competencia_data ?? a.competencia_data;
+  const db = b.fatura_competencia_data ?? b.competencia_data;
+  const dateDiff = db.localeCompare(da);
 
   if (dateDiff !== 0) {
     return dateDiff;
@@ -1042,6 +1079,14 @@ export function computeFaturaCompetenciaParaCompra(
   return `${targetYear}-${String(targetMonth).padStart(2, "0")}-01`;
 }
 
+function monthDateFromDay(anoMes: string, day: number) {
+  const [yearRaw, monthRaw] = anoMes.split("-").map(Number);
+  const year = yearRaw ?? new Date().getFullYear();
+  const month = monthRaw ?? new Date().getMonth() + 1;
+  const lastDay = new Date(year, month, 0).getDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
+}
+
 export async function createLancamento(input: {
   gestaoId: number;
   contaId: number;
@@ -1170,6 +1215,407 @@ export async function createLancamento(input: {
   } finally {
     connection.release();
   }
+}
+
+/**
+ * Cria N despesas no cartão (uma por parcela), competência e fatura avançando mês a mês.
+ * A primeira fatura segue `computeFaturaCompetenciaParaCompra` a partir da primeira competência.
+ */
+export async function createParcelamentoNoCartao(input: {
+  gestaoId: number;
+  userId: number;
+  contaId: number;
+  categoriaId: number;
+  status: "previsto" | "pendente" | "liquidado";
+  descricaoBase: string;
+  valorParcela: number;
+  totalParcelas: number;
+  primeiraCompetenciaData: string;
+  competenciaHora?: string | null;
+}): Promise<{ ids: number[] }> {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [contaRows] = await connection.query<Array<RowDataPacket & { tipo: string; fechamento_dia: number | null }>>(
+      `
+        SELECT tipo, fechamento_dia
+        FROM contas
+        WHERE id = ?
+          AND gestao_id = ?
+        LIMIT 1
+      `,
+      [input.contaId, input.gestaoId],
+    );
+    const conta = contaRows[0];
+    if (!conta || conta.tipo !== "cartao_credito") {
+      throw new Error("Conta invalida para parcelamento.");
+    }
+
+    const fechamentoDia = Number(conta.fechamento_dia ?? 1);
+    const fechamentoSeguro = fechamentoDia >= 1 && fechamentoDia <= 31 ? fechamentoDia : 1;
+    const faturaPrimeiraParcela = computeFaturaCompetenciaParaCompra(
+      input.primeiraCompetenciaData,
+      fechamentoSeguro,
+    );
+
+    const base = input.descricaoBase.trim();
+    const ids: number[] = [];
+    const competenciaHora = input.competenciaHora ?? null;
+    const liquidadoEm = input.status === "liquidado" ? new Date() : null;
+
+    for (let k = 1; k <= input.totalParcelas; k++) {
+      const competencia = addCalendarMonths(input.primeiraCompetenciaData, k - 1);
+      const faturaCompetencia = addCalendarMonths(faturaPrimeiraParcela, k - 1);
+      const descricao = `${base} (Parcela ${k} de ${input.totalParcelas})`;
+
+      const [result] = await connection.query<ResultSetHeader>(
+        `
+          INSERT INTO lancamentos (
+            gestao_id,
+            conta_id,
+            categoria_id,
+            criado_por_usuario_id,
+            tipo,
+            status,
+            meio,
+            descricao,
+            valor_total,
+            competencia_data,
+            fatura_competencia_data,
+            competencia_hora,
+            vencimento_data,
+            liquidado_em
+          )
+          VALUES (?, ?, ?, ?, 'despesa', ?, 'credito', ?, ?, ?, ?, ?, NULL, ?)
+        `,
+        [
+          input.gestaoId,
+          input.contaId,
+          input.categoriaId,
+          input.userId,
+          input.status,
+          descricao,
+          input.valorParcela,
+          competencia,
+          faturaCompetencia,
+          competenciaHora,
+          liquidadoEm,
+        ],
+      );
+
+      await connection.query(
+        `
+          INSERT INTO lancamento_rateios (lancamento_id, usuario_id, valor, percentual)
+          VALUES (?, ?, ?, 100)
+        `,
+        [result.insertId, input.userId, input.valorParcela],
+      );
+
+      ids.push(result.insertId);
+    }
+
+    await syncGestaoInicioEm(connection, input.gestaoId);
+
+    await connection.commit();
+
+    await registerAudit({
+      userId: input.userId,
+      gestaoId: input.gestaoId,
+      action: "create",
+      module: "lancamentos",
+      entity: "lancamento",
+      entityId: ids[0] ?? 0,
+      details: {
+        parcelamento_cartao: true,
+        quantidade: input.totalParcelas,
+        ids: ids.slice(0, 40),
+      },
+    });
+
+    return { ids };
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+export async function ensureGastoFixoLancamentoMes(input: {
+  gastoFixoId: number;
+  gestaoId: number;
+  userId: number;
+  anoMes: string;
+}) {
+  const [rows] = await pool.query<
+    Array<
+      RowDataPacket & {
+        id: number;
+        conta_id: number;
+        categoria_id: number;
+        nome: string;
+        descricao: string | null;
+        valor_estimado: string;
+        dia_vencimento: number;
+        meio: LancamentoMeio | null;
+      }
+    >
+  >(
+    `
+      SELECT id, conta_id, categoria_id, nome, descricao, valor_estimado, dia_vencimento, meio
+      FROM gastos_fixos
+      WHERE id = ?
+        AND gestao_id = ?
+        AND status = 'ativo'
+      LIMIT 1
+    `,
+    [input.gastoFixoId, input.gestaoId],
+  );
+
+  const gasto = rows[0];
+  if (!gasto) {
+    return null;
+  }
+
+  const [existing] = await pool.query<Array<RowDataPacket & { id: number }>>(
+    `
+      SELECT id
+      FROM lancamentos
+      WHERE gestao_id = ?
+        AND JSON_UNQUOTE(JSON_EXTRACT(metadados, '$.gasto_fixo_id')) = ?
+        AND JSON_UNQUOTE(JSON_EXTRACT(metadados, '$.ano_mes')) = ?
+      LIMIT 1
+    `,
+    [input.gestaoId, String(input.gastoFixoId), input.anoMes],
+  );
+
+  if (existing[0]?.id) {
+    return Number(existing[0].id);
+  }
+
+  const data = monthDateFromDay(input.anoMes, Number(gasto.dia_vencimento));
+  const id = await createLancamento({
+    gestaoId: input.gestaoId,
+    userId: input.userId,
+    contaId: Number(gasto.conta_id),
+    categoriaId: Number(gasto.categoria_id),
+    tipo: "despesa",
+    status: "previsto",
+    meio: gasto.meio ?? undefined,
+    descricao: gasto.descricao || `${gasto.nome} - previsto`,
+    valorTotal: Number(gasto.valor_estimado),
+    competenciaData: data,
+    vencimentoData: data,
+  });
+
+  await pool.query(
+    `
+      UPDATE lancamentos
+      SET recorrente = 1,
+          metadados = ?
+      WHERE id = ?
+    `,
+    [
+      JSON.stringify({
+        gasto_fixo_id: input.gastoFixoId,
+        ano_mes: input.anoMes,
+        origem: "gasto_fixo",
+      }),
+      id,
+    ],
+  );
+
+  return id;
+}
+
+export async function ensureGastosFixosLancamentosMes(input: {
+  gestaoId: number;
+  userId: number;
+  anoMes: string;
+}) {
+  const [rows] = await pool.query<Array<RowDataPacket & { id: number }>>(
+    `
+      SELECT id
+      FROM gastos_fixos
+      WHERE gestao_id = ?
+        AND status = 'ativo'
+      ORDER BY dia_vencimento ASC, nome ASC
+    `,
+    [input.gestaoId],
+  );
+
+  const ids: number[] = [];
+  for (const row of rows) {
+    const lancamentoId = await ensureGastoFixoLancamentoMes({
+      gastoFixoId: Number(row.id),
+      gestaoId: input.gestaoId,
+      userId: input.userId,
+      anoMes: input.anoMes,
+    });
+    if (lancamentoId) {
+      ids.push(lancamentoId);
+    }
+  }
+
+  return ids;
+}
+
+export async function createGastoFixo(input: {
+  gestaoId: number;
+  userId: number;
+  contaId: number;
+  categoriaId: number;
+  nome: string;
+  descricao?: string;
+  valorEstimado: number;
+  diaVencimento: number;
+  meio?: LancamentoMeio;
+  anoMes: string;
+}) {
+  const [result] = await pool.query<ResultSetHeader>(
+    `
+      INSERT INTO gastos_fixos (
+        gestao_id, criado_por_usuario_id, conta_id, categoria_id,
+        nome, descricao, valor_estimado, dia_vencimento, meio
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    [
+      input.gestaoId,
+      input.userId,
+      input.contaId,
+      input.categoriaId,
+      input.nome,
+      input.descricao || null,
+      input.valorEstimado,
+      input.diaVencimento,
+      input.meio ?? null,
+    ],
+  );
+
+  const gastoFixoId = result.insertId;
+  await ensureGastoFixoLancamentoMes({
+    gastoFixoId,
+    gestaoId: input.gestaoId,
+    userId: input.userId,
+    anoMes: input.anoMes,
+  });
+
+  await registerAudit({
+    userId: input.userId,
+    gestaoId: input.gestaoId,
+    action: "create",
+    module: "gastos_fixos",
+    entity: "gasto_fixo",
+    entityId: gastoFixoId,
+    details: { nome: input.nome, valorEstimado: input.valorEstimado },
+  });
+
+  return gastoFixoId;
+}
+
+export async function listGastosFixos(input: { gestaoId: number; anoMes: string }) {
+  const [rows] = await pool.query<GastoFixoRow[]>(
+    `
+      SELECT
+        gf.id,
+        gf.gestao_id,
+        gf.conta_id,
+        gf.categoria_id,
+        gf.nome,
+        gf.descricao,
+        gf.valor_estimado,
+        gf.dia_vencimento,
+        gf.meio,
+        gf.status,
+        ct.nome AS conta_nome,
+        c.nome AS categoria_nome,
+        l.id AS lancamento_mes_id,
+        l.status AS lancamento_mes_status
+      FROM gastos_fixos gf
+      INNER JOIN contas ct
+        ON ct.id = gf.conta_id
+      INNER JOIN categorias c
+        ON c.id = gf.categoria_id
+      LEFT JOIN lancamentos l
+        ON l.gestao_id = gf.gestao_id
+       AND JSON_UNQUOTE(JSON_EXTRACT(l.metadados, '$.gasto_fixo_id')) = CAST(gf.id AS CHAR)
+       AND JSON_UNQUOTE(JSON_EXTRACT(l.metadados, '$.ano_mes')) = ?
+      WHERE gf.gestao_id = ?
+        AND gf.status = 'ativo'
+      ORDER BY gf.dia_vencimento ASC, gf.nome ASC
+    `,
+    [input.anoMes, input.gestaoId],
+  );
+
+  return rows;
+}
+
+export async function listGastoFixoSugestoes(input: { gestaoId: number; anoMes: string }) {
+  const { from, to } = boundsForCalendarMonth(input.anoMes);
+  const start = addCalendarMonths(from, -5);
+  const [rows] = await pool.query<GastoFixoSugestaoRow[]>(
+    `
+      SELECT
+        base.descricao,
+        base.conta_id,
+        base.categoria_id,
+        base.conta_nome,
+        base.categoria_nome,
+        base.meio,
+        ROUND(AVG(base.valor_total), 2) AS valor_medio,
+        COUNT(DISTINCT base.ano_mes) AS meses,
+        COUNT(*) AS ocorrencias,
+        DAY(MAX(base.data_recorte)) AS ultimo_dia
+      FROM (
+        SELECT
+          l.descricao,
+          l.conta_id,
+          l.categoria_id,
+          ct.nome AS conta_nome,
+          c.nome AS categoria_nome,
+          l.meio,
+          l.valor_total,
+          ${SQL_L_DATA_RECORTE_GESTAO} AS data_recorte,
+          DATE_FORMAT(${SQL_L_DATA_RECORTE_GESTAO}, '%Y-%m') AS ano_mes
+        FROM lancamentos l
+        INNER JOIN contas ct
+          ON ct.id = l.conta_id
+        INNER JOIN categorias c
+          ON c.id = l.categoria_id
+        LEFT JOIN gastos_fixos gf
+          ON gf.gestao_id = l.gestao_id
+         AND gf.status = 'ativo'
+         AND gf.conta_id = l.conta_id
+         AND gf.categoria_id = l.categoria_id
+         AND LOWER(TRIM(gf.nome)) = LOWER(TRIM(l.descricao))
+        WHERE l.gestao_id = ?
+          AND l.tipo = 'despesa'
+          AND l.status <> 'cancelado'
+          AND COALESCE(c.nome, '') <> 'Saida da conta'
+          AND JSON_EXTRACT(l.metadados, '$.gasto_fixo_id') IS NULL
+          AND gf.id IS NULL
+          AND ${SQL_L_DATA_RECORTE_GESTAO} >= ?
+          AND ${SQL_L_DATA_RECORTE_GESTAO} <= ?
+      ) base
+      GROUP BY
+        LOWER(TRIM(base.descricao)),
+        base.descricao,
+        base.conta_id,
+        base.categoria_id,
+        base.conta_nome,
+        base.categoria_nome,
+        base.meio
+      HAVING COUNT(DISTINCT base.ano_mes) >= 2
+      ORDER BY meses DESC, valor_medio DESC
+      LIMIT 8
+    `,
+    [input.gestaoId, start, to],
+  );
+
+  return rows;
 }
 
 export async function createTransferencia(input: {
@@ -1659,9 +2105,9 @@ export async function listLancamentosPorPeriodo(input: {
         ON c.id = l.categoria_id
       WHERE l.gestao_id = ?
         AND l.status <> 'cancelado'
-        AND l.competencia_data >= ?
-        AND l.competencia_data <= ?
-      ORDER BY ${ORDER_BY_LANCAMENTO_RECIENTE_DESC}
+        AND ${SQL_L_DATA_RECORTE_GESTAO} >= ?
+        AND ${SQL_L_DATA_RECORTE_GESTAO} <= ?
+      ORDER BY ${ORDER_BY_LANCAMENTO_FATURA_DESC}
     `,
     [input.gestaoId, input.dateFrom, input.dateTo],
   );
@@ -1716,8 +2162,8 @@ export async function getGestaoPeriodoResumo(input: {
         ON ctd.id = l.conta_destino_id
       WHERE l.gestao_id = ?
         AND l.status <> 'cancelado'
-        AND l.competencia_data >= ?
-        AND l.competencia_data <= ?
+        AND ${SQL_L_DATA_RECORTE_GESTAO} >= ?
+        AND ${SQL_L_DATA_RECORTE_GESTAO} <= ?
       `,
     [input.gestaoId, input.dateFrom, input.dateTo],
   );
@@ -2466,8 +2912,8 @@ export async function getGestaoInsights(gestaoId: number): Promise<GestaoInsight
           AS despesas
       FROM lancamentos
       WHERE gestao_id = ?
-        AND competencia_data >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
-        AND competencia_data <= LAST_DAY(CURDATE())
+        AND ${SQL_DATA_RECORTE_GESTAO} >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+        AND ${SQL_DATA_RECORTE_GESTAO} <= LAST_DAY(CURDATE())
     `,
     [gestaoId],
   );
@@ -2483,8 +2929,8 @@ export async function getGestaoInsights(gestaoId: number): Promise<GestaoInsight
           AS despesas
       FROM lancamentos
       WHERE gestao_id = ?
-        AND competencia_data >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m-01')
-        AND competencia_data <= LAST_DAY(DATE_SUB(CURDATE(), INTERVAL 1 MONTH))
+        AND ${SQL_DATA_RECORTE_GESTAO} >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m-01')
+        AND ${SQL_DATA_RECORTE_GESTAO} <= LAST_DAY(DATE_SUB(CURDATE(), INTERVAL 1 MONTH))
     `,
     [gestaoId],
   );
@@ -2496,8 +2942,8 @@ export async function getGestaoInsights(gestaoId: number): Promise<GestaoInsight
           AS despesas
       FROM lancamentos
       WHERE gestao_id = ?
-        AND competencia_data >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
-        AND competencia_data <= CURDATE()
+        AND ${SQL_DATA_RECORTE_GESTAO} >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+        AND ${SQL_DATA_RECORTE_GESTAO} <= CURDATE()
     `,
     [gestaoId],
   );
@@ -2517,8 +2963,8 @@ export async function getGestaoInsights(gestaoId: number): Promise<GestaoInsight
       WHERE l.gestao_id = ?
         AND l.tipo = 'despesa'
         AND l.status <> 'cancelado'
-        AND l.competencia_data >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
-        AND l.competencia_data <= LAST_DAY(CURDATE())
+        AND ${SQL_L_DATA_RECORTE_GESTAO} >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+        AND ${SQL_L_DATA_RECORTE_GESTAO} <= LAST_DAY(CURDATE())
       GROUP BY c.id, c.nome
       ORDER BY total DESC
       LIMIT 5
@@ -2564,6 +3010,222 @@ export async function getGestaoInsights(gestaoId: number): Promise<GestaoInsight
   };
 }
 
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+/** Primeiro e último dia (YYYY-MM-DD) do mês civil `anoMes` (YYYY-MM). */
+export function boundsForCalendarMonth(anoMes: string): { from: string; to: string } {
+  const m = /^(\d{4})-(\d{2})$/.exec(anoMes.trim());
+  if (!m) {
+    throw new Error(`anoMes invalido: ${anoMes}`);
+  }
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  if (!Number.isFinite(y) || mo < 1 || mo > 12) {
+    throw new Error(`anoMes invalido: ${anoMes}`);
+  }
+  const to = new Date(y, mo, 0);
+  return {
+    from: `${y}-${pad2(mo)}-01`,
+    to: `${y}-${pad2(mo)}-${pad2(to.getDate())}`,
+  };
+}
+
+function defaultAnoMesLocal(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+}
+
+/** Meses civil `anoMes` (YYYY-MM) e mês anterior. */
+function prevCalendarMonth(anoMes: string): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(anoMes.trim());
+  if (!m) {
+    return defaultAnoMesLocal();
+  }
+  let y = Number(m[1]);
+  let mo = Number(m[2]) - 1;
+  if (mo < 1) {
+    mo = 12;
+    y -= 1;
+  }
+  return `${y}-${pad2(mo)}`;
+}
+
+export type MesResumoFluxo = {
+  mes: string;
+  receitas: string;
+  despesas: string;
+};
+
+/** Últimos `count` meses civis (incluindo o mês corrente), com totais por mês. */
+export async function listGestaoFluxoUltimosMeses(
+  gestaoId: number,
+  count: number,
+): Promise<MesResumoFluxo[]> {
+  const n = Math.min(Math.max(count, 1), 24);
+  const now = new Date();
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const start = new Date(now.getFullYear(), now.getMonth() - (n - 1), 1);
+  const from = `${start.getFullYear()}-${pad2(start.getMonth() + 1)}-01`;
+  const to = `${end.getFullYear()}-${pad2(end.getMonth() + 1)}-${pad2(end.getDate())}`;
+
+  const [rows] = await pool.query<
+    Array<RowDataPacket & { ym: string; receitas: string | null; despesas: string | null }>
+  >(
+    `
+      SELECT
+        DATE_FORMAT(${SQL_L_DATA_RECORTE_GESTAO}, '%Y-%m') AS ym,
+        COALESCE(SUM(CASE WHEN l.tipo = 'receita' AND l.status <> 'cancelado' THEN l.valor_total ELSE 0 END), 0)
+          AS receitas,
+        COALESCE(SUM(CASE WHEN l.tipo = 'despesa' AND l.status <> 'cancelado' THEN l.valor_total ELSE 0 END), 0)
+          AS despesas
+      FROM lancamentos l
+      WHERE l.gestao_id = ?
+        AND ${SQL_L_DATA_RECORTE_GESTAO} >= ?
+        AND ${SQL_L_DATA_RECORTE_GESTAO} <= ?
+      GROUP BY DATE_FORMAT(${SQL_L_DATA_RECORTE_GESTAO}, '%Y-%m')
+      ORDER BY ym ASC
+    `,
+    [gestaoId, from, to],
+  );
+
+  const byYm = new Map(rows.map((r) => [r.ym, r]));
+  const out: MesResumoFluxo[] = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const ym = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+    const row = byYm.get(ym);
+    out.push({
+      mes: ym,
+      receitas: row?.receitas ?? "0",
+      despesas: row?.despesas ?? "0",
+    });
+  }
+  return out;
+}
+
+/** Insights do mês civil `anoMes` (YYYY-MM). Projeção só faz sentido no mês corrente. */
+export async function getGestaoInsightsParaMes(
+  gestaoId: number,
+  anoMes: string,
+): Promise<GestaoInsights> {
+  const { from, to } = boundsForCalendarMonth(anoMes);
+  const prev = prevCalendarMonth(anoMes);
+  const { from: prevFrom, to: prevTo } = boundsForCalendarMonth(prev);
+
+  const now = new Date();
+  const curYm = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}`;
+  const isCurrentMonth = anoMes === curYm;
+  const todayIso = now.toISOString().slice(0, 10);
+  const ateHojeEnd = isCurrentMonth && todayIso <= to ? todayIso : to;
+
+  const [mesAtual] = await pool.query<
+    Array<RowDataPacket & { receitas: string | null; despesas: string | null }>
+  >(
+    `
+      SELECT
+        COALESCE(SUM(CASE WHEN tipo = 'receita' AND status <> 'cancelado' THEN valor_total ELSE 0 END), 0)
+          AS receitas,
+        COALESCE(SUM(CASE WHEN tipo = 'despesa' AND status <> 'cancelado' THEN valor_total ELSE 0 END), 0)
+          AS despesas
+      FROM lancamentos
+      WHERE gestao_id = ?
+        AND ${SQL_DATA_RECORTE_GESTAO} >= ?
+        AND ${SQL_DATA_RECORTE_GESTAO} <= ?
+    `,
+    [gestaoId, from, to],
+  );
+
+  const [mesAnterior] = await pool.query<
+    Array<RowDataPacket & { receitas: string | null; despesas: string | null }>
+  >(
+    `
+      SELECT
+        COALESCE(SUM(CASE WHEN tipo = 'receita' AND status <> 'cancelado' THEN valor_total ELSE 0 END), 0)
+          AS receitas,
+        COALESCE(SUM(CASE WHEN tipo = 'despesa' AND status <> 'cancelado' THEN valor_total ELSE 0 END), 0)
+          AS despesas
+      FROM lancamentos
+      WHERE gestao_id = ?
+        AND ${SQL_DATA_RECORTE_GESTAO} >= ?
+        AND ${SQL_DATA_RECORTE_GESTAO} <= ?
+    `,
+    [gestaoId, prevFrom, prevTo],
+  );
+
+  const [ateHoje] = await pool.query<Array<RowDataPacket & { despesas: string | null }>>(
+    `
+      SELECT
+        COALESCE(SUM(CASE WHEN tipo = 'despesa' AND status <> 'cancelado' THEN valor_total ELSE 0 END), 0)
+          AS despesas
+      FROM lancamentos
+      WHERE gestao_id = ?
+        AND ${SQL_DATA_RECORTE_GESTAO} >= ?
+        AND ${SQL_DATA_RECORTE_GESTAO} <= ?
+    `,
+    [gestaoId, from, ateHojeEnd],
+  );
+
+  const diasNoMesAtual = new Date(Number(from.slice(0, 4)), Number(from.slice(5, 7)), 0).getDate();
+  const diaDoMes = isCurrentMonth
+    ? Math.min(Number(todayIso.slice(8, 10)), diasNoMesAtual)
+    : diasNoMesAtual;
+
+  const [topCats] = await pool.query<Array<RowDataPacket & { nome: string | null; total: string | null }>>(
+    `
+      SELECT c.nome AS nome, COALESCE(SUM(l.valor_total), 0) AS total
+      FROM lancamentos l
+      INNER JOIN categorias c
+        ON c.id = l.categoria_id
+      WHERE l.gestao_id = ?
+        AND l.tipo = 'despesa'
+        AND l.status <> 'cancelado'
+        AND ${SQL_L_DATA_RECORTE_GESTAO} >= ?
+        AND ${SQL_L_DATA_RECORTE_GESTAO} <= ?
+      GROUP BY c.id, c.nome
+      ORDER BY total DESC
+      LIMIT 5
+    `,
+    [gestaoId, from, to],
+  );
+
+  const receitasMA = Number(mesAtual[0]?.receitas ?? 0);
+  const despesasMA = Number(mesAtual[0]?.despesas ?? 0);
+  const despesasAnt = Number(mesAnterior[0]?.despesas ?? 0);
+  const despesasAteHoje = Number(ateHoje[0]?.despesas ?? 0);
+
+  const mediaDiaria = diaDoMes > 0 ? despesasAteHoje / diaDoMes : 0;
+  const projecao = mediaDiaria * diasNoMesAtual;
+
+  let margemFluxoPct: string | null = null;
+  if (receitasMA > 0) {
+    margemFluxoPct = (((receitasMA - despesasMA) / receitasMA) * 100).toFixed(1);
+  }
+
+  let variacaoDespesaVsMesAnteriorPct: string | null = null;
+  if (despesasAnt > 0) {
+    variacaoDespesaVsMesAnteriorPct = (((despesasMA - despesasAnt) / despesasAnt) * 100).toFixed(1);
+  }
+
+  return {
+    receitasMesAtual: mesAtual[0]?.receitas ?? "0",
+    despesasMesAtual: mesAtual[0]?.despesas ?? "0",
+    receitasMesAnterior: mesAnterior[0]?.receitas ?? "0",
+    despesasMesAnterior: mesAnterior[0]?.despesas ?? "0",
+    despesasAteHojeMesAtual: ateHoje[0]?.despesas ?? "0",
+    diaDoMes,
+    diasNoMesAtual,
+    projecaoDespesaFimMes: projecao.toFixed(2),
+    margemFluxoPct,
+    variacaoDespesaVsMesAnteriorPct,
+    topCategorias: topCats.map((row) => ({
+      nome: row.nome ?? "(sem nome)",
+      total: row.total ?? "0",
+    })),
+  };
+}
+
 export type RevisarDuplicidadeRow = RowDataPacket & {
   descricao: string;
   valor_total: string;
@@ -2573,27 +3235,30 @@ export type RevisarDuplicidadeRow = RowDataPacket & {
   ultima: string;
 };
 
-export async function listRevisarDuplicidadesMes(gestaoId: number) {
+export async function listRevisarDuplicidadesMes(gestaoId: number, anoMes?: string) {
+  const mes = anoMes ?? defaultAnoMesLocal();
+  const { from, to } = boundsForCalendarMonth(mes);
   const [rows] = await pool.query<RevisarDuplicidadeRow[]>(
     `
       SELECT
         l.descricao AS descricao,
         FORMAT(l.valor_total, 2, 'de_DE') AS valor_total,
         COUNT(*) AS vezes,
-        GROUP_CONCAT(l.id ORDER BY l.competencia_data SEPARATOR ',') AS ids,
-        DATE_FORMAT(MIN(l.competencia_data), '%Y-%m-%d') AS primeira,
-        DATE_FORMAT(MAX(l.competencia_data), '%Y-%m-%d') AS ultima
+        GROUP_CONCAT(l.id ORDER BY ${SQL_L_DATA_RECORTE_GESTAO} SEPARATOR ',') AS ids,
+        DATE_FORMAT(MIN(${SQL_L_DATA_RECORTE_GESTAO}), '%Y-%m-%d') AS primeira,
+        DATE_FORMAT(MAX(${SQL_L_DATA_RECORTE_GESTAO}), '%Y-%m-%d') AS ultima
       FROM lancamentos l
       WHERE l.gestao_id = ?
         AND l.status <> 'cancelado'
         AND l.tipo = 'despesa'
-        AND l.competencia_data >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+        AND ${SQL_L_DATA_RECORTE_GESTAO} >= ?
+        AND ${SQL_L_DATA_RECORTE_GESTAO} <= ?
       GROUP BY l.descricao, l.valor_total
       HAVING COUNT(*) >= 2
       ORDER BY COUNT(*) DESC, SUM(l.valor_total) DESC
       LIMIT 40
     `,
-    [gestaoId],
+    [gestaoId, from, to],
   );
 
   return rows;
@@ -2606,7 +3271,9 @@ export type RevisarMicrovalorRow = RowDataPacket & {
   competencia_data: string;
 };
 
-export async function listRevisarMicrovaloresMes(gestaoId: number) {
+export async function listRevisarMicrovaloresMes(gestaoId: number, anoMes?: string) {
+  const mes = anoMes ?? defaultAnoMesLocal();
+  const { from, to } = boundsForCalendarMonth(mes);
   const [rows] = await pool.query<RevisarMicrovalorRow[]>(
     `
       SELECT
@@ -2618,13 +3285,14 @@ export async function listRevisarMicrovaloresMes(gestaoId: number) {
       WHERE l.gestao_id = ?
         AND l.status <> 'cancelado'
         AND l.tipo = 'despesa'
-        AND l.competencia_data >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+        AND ${SQL_L_DATA_RECORTE_GESTAO} >= ?
+        AND ${SQL_L_DATA_RECORTE_GESTAO} <= ?
         AND l.valor_total > 0
         AND l.valor_total < 5
-      ORDER BY l.competencia_data DESC, l.id DESC
+      ORDER BY ${SQL_L_DATA_RECORTE_GESTAO} DESC, l.id DESC
       LIMIT 40
     `,
-    [gestaoId],
+    [gestaoId, from, to],
   );
 
   return rows;
@@ -2668,9 +3336,11 @@ export async function findRecentDuplicateLancamentoId(input: {
   valorTotal: number;
   descricao: string;
   competenciaData: string;
+  competenciaHora?: string;
   segundos?: number;
 }): Promise<number | null> {
   const segundos = input.segundos ?? 120;
+  const hasHora = Boolean(input.competenciaHora);
 
   const [rows] = await pool.query<Array<RowDataPacket & { id: number }>>(
     `
@@ -2683,6 +3353,7 @@ export async function findRecentDuplicateLancamentoId(input: {
         AND ABS(valor_total - ?) < 0.009
         AND LOWER(TRIM(descricao)) = LOWER(TRIM(?))
         AND competencia_data = ?
+        AND (? = 0 OR TIME_FORMAT(competencia_hora, '%H:%i') = ?)
         AND criado_em >= DATE_SUB(NOW(), INTERVAL ? SECOND)
       ORDER BY id DESC
       LIMIT 1
@@ -2693,6 +3364,8 @@ export async function findRecentDuplicateLancamentoId(input: {
       input.valorTotal,
       input.descricao,
       input.competenciaData,
+      hasHora ? 1 : 0,
+      input.competenciaHora ?? null,
       segundos,
     ],
   );

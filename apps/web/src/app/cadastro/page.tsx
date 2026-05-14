@@ -1,6 +1,6 @@
 import Link from "next/link";
-import Image from "next/image";
 
+import { BrandLogo } from "@/components/brand/brand-logo";
 import { PasswordField } from "@/components/auth/password-field";
 import { registerAction } from "./actions";
 
@@ -22,15 +22,7 @@ export default async function CadastroPage({ searchParams }: CadastroPageProps) 
       <div className="mx-auto grid max-w-5xl gap-6 lg:grid-cols-[0.9fr_1.1fr]">
         <section className="hidden rounded-[2rem] bg-surface-strong p-8 lg:block">
           <div className="flex min-h-full flex-col items-center justify-center gap-4 text-center">
-            <Image
-              alt="LT CashFlow"
-              className="h-auto w-[180px] max-w-full sm:w-[300px]"
-              height={319}
-              priority
-              sizes="(max-width: 640px) 180px, 300px"
-              src="/brand/ltcashflow-logo-horizontal-1-tight.png"
-              width={1198}
-            />
+            <BrandLogo priority variant="auth" />
             <p className="max-w-sm text-sm leading-6 text-muted">
               Crie sua conta para abrir sua primeira gestão.
             </p>
@@ -38,6 +30,11 @@ export default async function CadastroPage({ searchParams }: CadastroPageProps) 
         </section>
 
         <section className="rounded-[2rem] border border-line bg-surface p-5 sm:p-8">
+          <div className="mb-6 flex justify-center lg:hidden">
+            <Link aria-label="LT CashFlow" className="inline-block" href="/">
+              <BrandLogo priority variant="auth" />
+            </Link>
+          </div>
           <form action={registerAction} className="space-y-3 sm:space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="nome">

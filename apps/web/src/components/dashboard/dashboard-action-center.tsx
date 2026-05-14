@@ -8,6 +8,7 @@ import {
   createContaAction,
   createGestaoAction,
   createLancamentoAction,
+  createParcelamentoCartaoAction,
   createTransferenciaAction,
 } from "@/app/dashboard/actions";
 import { DateInput } from "@/components/ui/date-input";
@@ -60,7 +61,7 @@ type ExtratoPreview = {
   missingItems: ExtratoPreviewItem[];
 };
 
-type ModalKey = "gestao" | "origem" | "categoria" | "lancamento" | "transferencia" | "extrato" | null;
+type ModalKey = "gestao" | "origem" | "categoria" | "lancamento" | "parcelamento" | "transferencia" | "extrato" | null;
 
 type LaunchDraft = {
   descricao: string;
@@ -190,6 +191,7 @@ export function DashboardActionCenter({
   const [launchDraft, setLaunchDraft] = useState<LaunchDraft>(defaultLaunchDraft);
   const [launchFormKey, setLaunchFormKey] = useState(0);
   const [launchHasDueDate, setLaunchHasDueDate] = useState(false);
+  const [gerarParcelasCartao, setGerarParcelasCartao] = useState(false);
   const selectedStatementConta = contas.find((conta) => conta.id === statementContaId) ?? null;
   const statementContaIsCredit = selectedStatementConta?.tipo === "cartao_credito";
   const selectedCategory = categorias.find((categoria) => categoria.id === selectedCategoryId) ?? null;
@@ -222,6 +224,7 @@ export function DashboardActionCenter({
       if (!stored) {
         setLaunchDraft(defaultLaunchDraft);
         setLaunchFormKey((current) => current + 1);
+        setGerarParcelasCartao(false);
         return;
       }
 
@@ -242,7 +245,15 @@ export function DashboardActionCenter({
       setLaunchHasDueDate(false);
       setLaunchFormKey((current) => current + 1);
     }
+    setGerarParcelasCartao(false);
   }, [openModal]);
+
+  useEffect(() => {
+    const conta = contas.find((c) => c.id === launchDraft.contaId);
+    if (launchDraft.tipo !== "despesa" || launchDraft.meio !== "credito" || conta?.tipo !== "cartao_credito") {
+      setGerarParcelasCartao(false);
+    }
+  }, [launchDraft.tipo, launchDraft.meio, launchDraft.contaId, contas]);
 
   function rememberLaunchDraft(form: HTMLFormElement) {
     const data = new FormData(form);
@@ -386,53 +397,81 @@ export function DashboardActionCenter({
 
   return (
     <>
-      <div className="fixed right-4 bottom-4 z-40 sm:right-6 sm:bottom-6">
-        <div className="relative h-48 w-48 overflow-visible sm:h-56 sm:w-56">
-          {menuOpen && gestaoId ? (
-            <>
-              <div className="absolute right-0 bottom-0 flex w-20 flex-col items-center gap-1" style={{ transform: "translate(-6px, -92px)" }}>
-                <button className="action-arc-circle" onClick={() => openAction("lancamento")} type="button">
-                  +
-                </button>
-                <span className="text-[10px] font-medium text-muted">Lancamento</span>
-              </div>
-              <div className="absolute right-0 bottom-0 flex w-20 flex-col items-center gap-1" style={{ transform: "translate(-54px, -146px)" }}>
-                <button className="action-arc-circle" onClick={() => openAction("transferencia")} type="button">
-                  ↔
-                </button>
-                <span className="text-[10px] font-medium text-muted">Aplicacao</span>
-              </div>
-              <div className="absolute right-0 bottom-0 flex w-20 flex-col items-center gap-1" style={{ transform: "translate(-110px, -172px)" }}>
-                <button className="action-arc-circle" onClick={() => openAction("extrato")} type="button">
-                  ≡
-                </button>
-                <span className="text-[10px] font-medium text-muted">Extrato</span>
-              </div>
-              <div className="absolute right-0 bottom-0 flex w-20 flex-col items-center gap-1" style={{ transform: "translate(-166px, -146px)" }}>
-                <button className="action-arc-circle" onClick={() => openAction("origem")} type="button">
-                  ⊕
-                </button>
-                <span className="text-[10px] font-medium text-muted">Conta</span>
-              </div>
-              <div className="absolute right-0 bottom-0 flex w-20 flex-col items-center gap-1" style={{ transform: "translate(-220px, -92px)" }}>
-                <button className="action-arc-circle" onClick={openCategoryCreate} type="button">
-                  #
-                </button>
-                <span className="text-[10px] font-medium text-muted">Categoria</span>
-              </div>
-            </>
-          ) : null}
+      {menuOpen && gestaoId ? (
+        <button
+          aria-label="Fechar acoes rapidas"
+          className="fixed inset-0 z-[58] cursor-default bg-black/25"
+          onClick={() => setMenuOpen(false)}
+          type="button"
+        />
+      ) : null}
 
-          <button
-            aria-expanded={menuOpen}
-            aria-label="Abrir acoes rapidas"
-            className="absolute right-0 bottom-0 flex h-16 w-16 items-center justify-center rounded-full bg-foreground text-3xl font-light text-white shadow-[0_18px_50px_rgba(30,42,47,0.22)] transition-transform duration-200 hover:scale-105 active:scale-95"
-            onClick={() => setMenuOpen((current) => !current)}
-            type="button"
+      <div className="fixed right-4 bottom-4 z-[60] flex flex-col items-end gap-2 sm:right-6 sm:bottom-6">
+        {menuOpen && gestaoId ? (
+          <nav
+            aria-label="Acoes rapidas"
+            className="flex w-[12.5rem] max-w-[calc(100vw-5rem)] flex-col gap-0.5 rounded-2xl border border-line bg-surface p-1.5 shadow-[0_12px_40px_rgba(30,42,47,0.14)]"
           >
-            {menuOpen ? "×" : "+"}
-          </button>
-        </div>
+            <button
+              className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-foreground transition hover:bg-surface-strong"
+              onClick={() => openAction("lancamento")}
+              type="button"
+            >
+              <span>Novo lancamento</span>
+              <span className="text-muted">+</span>
+            </button>
+            <button
+              className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-foreground transition hover:bg-surface-strong"
+              onClick={() => openAction("parcelamento")}
+              type="button"
+            >
+              <span>Parcelas no cartao</span>
+              <span className="text-xs font-bold text-muted">12</span>
+            </button>
+            <button
+              className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-foreground transition hover:bg-surface-strong"
+              onClick={() => openAction("transferencia")}
+              type="button"
+            >
+              <span>Aplicacao / transferencia</span>
+              <span className="text-muted">↔</span>
+            </button>
+            <button
+              className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-foreground transition hover:bg-surface-strong"
+              onClick={() => openAction("extrato")}
+              type="button"
+            >
+              <span>Extrato (importar)</span>
+              <span className="text-muted">≡</span>
+            </button>
+            <button
+              className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-foreground transition hover:bg-surface-strong"
+              onClick={() => openAction("origem")}
+              type="button"
+            >
+              <span>Nova conta</span>
+              <span className="text-muted">⊕</span>
+            </button>
+            <button
+              className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-foreground transition hover:bg-surface-strong"
+              onClick={openCategoryCreate}
+              type="button"
+            >
+              <span>Nova categoria</span>
+              <span className="text-muted">#</span>
+            </button>
+          </nav>
+        ) : null}
+
+        <button
+          aria-expanded={menuOpen}
+          aria-label="Abrir acoes rapidas"
+          className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-foreground text-3xl font-light text-white shadow-[0_18px_50px_rgba(30,42,47,0.22)] transition-transform duration-200 hover:scale-105 active:scale-95"
+          onClick={() => setMenuOpen((current) => !current)}
+          type="button"
+        >
+          {menuOpen ? "×" : "+"}
+        </button>
       </div>
 
       <DashboardModal
@@ -896,13 +935,70 @@ export function DashboardActionCenter({
               placeholder="R$ 0,00"
               required
             />
-            <DateInput
-              className="rounded-2xl border border-line bg-background px-4 py-3"
-              defaultValue={launchDraft.competenciaData || hoje}
-              name="competenciaData"
-              onValueChange={(value) => updateLaunchDraft({ competenciaData: value })}
-              required
-            />
+            {launchDraft.tipo === "despesa" &&
+            launchDraft.meio === "credito" &&
+            contas.find((c) => c.id === launchDraft.contaId)?.tipo === "cartao_credito" ? (
+              <div className="rounded-2xl border border-accent/30 bg-accent-soft/35 p-4 md:col-span-2">
+                <label className="flex cursor-pointer items-start gap-3">
+                  <input
+                    checked={gerarParcelasCartao}
+                    className="mt-1"
+                    name="gerarParcelas"
+                    onChange={(event) => setGerarParcelasCartao(event.target.checked)}
+                    type="checkbox"
+                    value="on"
+                  />
+                  <span>
+                    <span className="font-semibold text-foreground">Isto é compra parcelada no cartão</span>
+                    <span className="mt-1 block text-xs leading-relaxed text-muted">
+                      Marque para gerar vários lançamentos de uma vez (mesmo valor em cada parcela). Informe em quantas
+                      vezes; a data abaixo é a da <strong className="text-foreground">primeira</strong> parcela; as
+                      seguintes avançam mês a mês na competência e na fatura.
+                    </span>
+                  </span>
+                </label>
+                {gerarParcelasCartao ? (
+                  <label className="mt-3 flex max-w-xs flex-col gap-1.5 pl-7">
+                    <span className="text-xs font-medium text-muted">Parcelas (total)</span>
+                    <input
+                      className="rounded-xl border border-line bg-background px-3 py-2 text-sm"
+                      defaultValue={12}
+                      max={60}
+                      min={2}
+                      name="totalParcelas"
+                      required
+                      type="number"
+                    />
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="contents">
+              {gerarParcelasCartao ? (
+                <p className="text-xs text-muted md:col-span-2">
+                  Data da <strong className="text-foreground">primeira</strong> parcela (competência)
+                </p>
+              ) : null}
+              <DateInput
+                className="rounded-2xl border border-line bg-background px-4 py-3"
+                defaultValue={launchDraft.competenciaData || hoje}
+                name="competenciaData"
+                onValueChange={(value) => updateLaunchDraft({ competenciaData: value })}
+                required
+              />
+            </div>
+            <p className="text-xs leading-relaxed text-muted md:col-span-2">
+              <strong className="text-foreground">Parcelas:</strong> com despesa em crédito no cartão, use a caixa
+              acima ou o assistente{" "}
+              <button
+                className="font-semibold text-accent underline-offset-2 hover:underline"
+                onClick={() => setOpenModal("parcelamento")}
+                type="button"
+              >
+                Parcelas no cartão
+              </button>{" "}
+              no menu (+).
+            </p>
             <input
               className="rounded-2xl border border-line bg-background px-4 py-3"
               name="competenciaHora"
@@ -948,10 +1044,93 @@ export function DashboardActionCenter({
                 className="rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white"
                 type="submit"
               >
-                Registrar lancamento
+                {gerarParcelasCartao ? "Gerar parcelas no cartao" : "Registrar lancamento"}
               </button>
             </div>
           </form>
+        ) : null}
+      </DashboardModal>
+
+      <DashboardModal
+        description="Cria varias despesas no cartao (meio credito), uma por parcela, com competencia e fatura avancando mes a mes. A primeira fatura usa o dia de fechamento do cartao; confira se bate com o banco e ajuste linhas no extrato se precisar."
+        onClose={closeModal}
+        open={openModal === "parcelamento"}
+        title="Parcelas no cartao"
+      >
+        {gestaoId ? (
+          contas.some((c) => c.tipo === "cartao_credito") ? (
+            <form action={createParcelamentoCartaoAction} className="grid gap-3 md:grid-cols-2" key={`parcelamento-${gestaoId}`}>
+              <input name="gestaoId" type="hidden" value={gestaoId} />
+              <input
+                className="rounded-2xl border border-line bg-background px-4 py-3 md:col-span-2"
+                name="descricaoBase"
+                placeholder="Ex.: Centauro CE242 (sem parcela no texto — o sistema acrescenta)"
+                required
+                maxLength={160}
+              />
+              <select className="rounded-2xl border border-line bg-background px-4 py-3" name="contaId" required>
+                <option value="">Cartao de credito</option>
+                {contas
+                  .filter((conta) => conta.tipo === "cartao_credito")
+                  .map((conta) => (
+                    <option key={conta.id} value={conta.id}>
+                      {conta.nome}
+                    </option>
+                  ))}
+              </select>
+              <select className="rounded-2xl border border-line bg-background px-4 py-3" name="categoriaId" required>
+                <option value="">Categoria</option>
+                {categorias.map((categoria) => (
+                  <option key={categoria.id} value={categoria.id}>
+                    {categoria.nome}
+                  </option>
+                ))}
+              </select>
+              <MoneyInput
+                className="rounded-2xl border border-line bg-background px-4 py-3"
+                name="valorParcela"
+                placeholder="Valor de cada parcela"
+                required
+              />
+              <label className="flex flex-col gap-1 rounded-2xl border border-line bg-background px-4 py-3">
+                <span className="text-xs font-medium text-muted">Quantidade de parcelas (2 a 60)</span>
+                <input
+                  className="bg-transparent outline-none"
+                  defaultValue={12}
+                  max={60}
+                  min={2}
+                  name="totalParcelas"
+                  required
+                  type="number"
+                />
+              </label>
+              <DateInput
+                className="rounded-2xl border border-line bg-background px-4 py-3"
+                defaultValue={hoje}
+                name="primeiraCompetenciaData"
+                required
+              />
+              <select className="rounded-2xl border border-line bg-background px-4 py-3" defaultValue="liquidado" name="status">
+                <option value="liquidado">Liquidado</option>
+                <option value="pendente">Pendente</option>
+                <option value="previsto">Previsto</option>
+              </select>
+              <input className="rounded-2xl border border-line bg-background px-4 py-3" name="competenciaHora" type="time" />
+              <p className="text-xs text-muted md:col-span-2">
+                A parcela 1 usa a data acima; as seguintes somam um mes civil na competencia e na fatura. Descricao
+                final: <em>sua base + &quot;(Parcela k de N)&quot;</em>.
+              </p>
+              <div className="mt-2 flex justify-end md:col-span-2">
+                <button className="rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white" type="submit">
+                  Gerar parcelas
+                </button>
+              </div>
+            </form>
+          ) : (
+            <p className="text-sm text-muted">
+              Cadastre um cartao de credito em Contas para usar este assistente.
+            </p>
+          )
         ) : null}
       </DashboardModal>
 

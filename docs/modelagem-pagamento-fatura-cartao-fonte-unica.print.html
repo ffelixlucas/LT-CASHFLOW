@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pagamento de fatura — LT CashFlow</title>
+  <style>
+    @page { size: A4; margin: 18mm 16mm; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      font-size: 11pt;
+      line-height: 1.45;
+      color: #1a1a1a;
+      max-width: 190mm;
+      margin: 0 auto;
+      padding: 12mm 10mm 20mm;
+    }
+    h1 { font-size: 18pt; margin: 0 0 0.4em; page-break-after: avoid; }
+    h2 { font-size: 13pt; margin: 1.4em 0 0.5em; border-bottom: 1px solid #ccc; padding-bottom: 0.2em; page-break-after: avoid; }
+    h3 { font-size: 11.5pt; margin: 1.1em 0 0.35em; page-break-after: avoid; }
+    p { margin: 0.45em 0; }
+    ul, ol { margin: 0.35em 0 0.6em 1.2em; }
+    li { margin: 0.2em 0; }
+    .meta { color: #444; font-size: 10pt; margin-bottom: 1.2em; }
+    table { width: 100%; border-collapse: collapse; margin: 0.6em 0 1em; font-size: 10pt; page-break-inside: avoid; }
+    th, td { border: 1px solid #bbb; padding: 6px 8px; text-align: left; vertical-align: top; }
+    th { background: #f0f0f0; font-weight: 600; }
+    code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 9.5pt; background: #f4f4f4; padding: 0 4px; border-radius: 3px; }
+    pre.diagram {
+      font-family: ui-monospace, monospace;
+      font-size: 9pt;
+      background: #f8f8f8;
+      border: 1px solid #ddd;
+      padding: 10px 12px;
+      white-space: pre-wrap;
+      page-break-inside: avoid;
+    }
+    blockquote {
+      margin: 0.8em 0;
+      padding: 0.5em 1em;
+      border-left: 4px solid #333;
+      background: #fafafa;
+      font-style: italic;
+    }
+    hr { border: none; border-top: 1px solid #ddd; margin: 1.5em 0; }
+    @media print {
+      body { padding: 0; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+
+<h1>Pagamento de fatura de cartão: estado atual, problemas e modelo desejado</h1>
+<p class="meta"><strong>LT CashFlow</strong> — Documento técnico · Versão 1.0 · 12 de maio de 2026<br />
+Público: produto, desenvolvimento e reconciliação com extratos bancários.</p>
+
+<h2>1. Resumo executivo</h2>
+<p>Hoje o sistema registra o pagamento da fatura do cartão como <strong>uma despesa na conta corrente</strong>, identificada principalmente por <strong>texto na descrição</strong> (<code>Pagamento efetuado - Fatura Cartão Inter</code>, etc.). <strong>Não existe no banco um campo que diga explicitamente qual fatura (qual ciclo) aquele pagamento abate.</strong></p>
+<p>Isso faz com que cada tela (extrato da corrente, página do cartão, fechamento semanal, métricas) <strong>reinterprete o mesmo conceito com regras diferentes</strong> — janelas de data, <code>LIKE</code> em descrição, exclusão de “pagamento de fatura” dos totais de débito da semana, etc. O resultado é <strong>divergência entre o app e o app do banco</strong> e <strong>dificuldade de cruzar</strong> pagamento na corrente com redução de dívida no cartão.</p>
+<p>O modelo desejado é: <strong>uma única origem de verdade</strong> — o pagamento nasce como <strong>transferência da corrente para a conta do cartão</strong>, com um <strong>identificador explícito da fatura-alvo</strong> (ex.: <code>fatura_alvo_competencia_data = '2026-05-01'</code>). Todas as telas leem esse mesmo registro.</p>
+
+<h2>2. Conceitos que não podem ser misturados</h2>
+<h3>2.1 Conta corrente (caixa)</h3>
+<ul>
+  <li>Representa <strong>dinheiro que você tem no banco</strong>.</li>
+  <li><strong>Saldo</strong> = saldo inicial + receitas − despesas − transferências que saem + transferências que entram.</li>
+  <li>O “mês civil” <strong>não define</strong> o saldo: o saldo é <strong>cumulativo</strong> até hoje.</li>
+</ul>
+<h3>2.2 Cartão de crédito (passivo)</h3>
+<ul>
+  <li>Cada compra no crédito <strong>aumenta</strong> o que você deve até pagar.</li>
+  <li>O banco organiza em <strong>ciclos de fatura</strong> (fechamento → próximo fechamento), não no mês da corrente.</li>
+  <li><strong>Fatura</strong> = compras (e parcelas) daquele ciclo + eventual saldo anterior não pago.</li>
+  <li><strong>Pagamento da fatura</strong> = dinheiro sai da corrente e <strong>reduz</strong> a dívida do cartão — é movimento entre duas “bolsas”, não consumo novo.</li>
+</ul>
+<h3>2.3 Ciclo da fatura vs “próximo mês”</h3>
+<ul>
+  <li>Não é o mesmo que “virou o mês na corrente”.</li>
+  <li>Compra após o <strong>dia de fechamento</strong> entra na <strong>próxima fatura</strong>, ainda que a data civil seja o mesmo mês.</li>
+  <li><strong>Parcelamentos</strong>: a data da compra original pode ser antiga; o banco mostra em qual fatura a parcela cai — no app isso é <code>fatura_competencia_data</code> nas compras (quando correto).</li>
+</ul>
+<p><strong>Regra mental:</strong> corrente = fluxo contínuo; cartão = série de ciclos. O pagamento liga os dois e precisa saber <strong>qual ciclo</strong> está sendo quitado.</p>
+
+<h2>3. Estado atual (implementação)</h2>
+<h3>3.1 Tabela <code>lancamentos</code></h3>
+<table>
+  <thead><tr><th>Campo</th><th>Uso típico</th></tr></thead>
+  <tbody>
+    <tr><td><code>tipo</code></td><td><code>receita</code>, <code>despesa</code>, <code>transferencia</code>, <code>ajuste</code></td></tr>
+    <tr><td><code>conta_id</code></td><td>Conta de origem</td></tr>
+    <tr><td><code>conta_destino_id</code></td><td>Destino em transferências; frequentemente <code>NULL</code> em pagamentos de fatura atuais</td></tr>
+    <tr><td><code>meio</code></td><td><code>credito</code> nas compras; seeds usam <code>transferencia</code> como meio mas <strong>tipo segue <code>despesa</code></strong> na corrente para pagamento</td></tr>
+    <tr><td><code>competencia_data</code></td><td>Data do extrato / contábil</td></tr>
+    <tr><td><code>fatura_competencia_data</code></td><td>Nas compras no cartão: primeiro dia do mês da <strong>fatura em que a compra entra</strong></td></tr>
+    <tr><td><em>(ausente)</em></td><td><strong>Campo explícito “paga a fatura X”</strong> nos pagamentos</td></tr>
+  </tbody>
+</table>
+
+<h3>3.2 Compras no cartão</h3>
+<ul>
+  <li><code>tipo = 'despesa'</code>, <code>conta_id</code> = cartão, <code>meio = 'credito'</code>.</li>
+  <li><code>computeFaturaCompetenciaParaCompra</code> em <code>repository.ts</code> preenche <code>fatura_competencia_data</code> em novos lançamentos quando ausente.</li>
+</ul>
+
+<h3>3.3 Pagamento da fatura (padrão atual na base)</h3>
+<ul>
+  <li><code>tipo = 'despesa'</code>, <code>conta_id</code> = corrente, <code>conta_destino_id = NULL</code></li>
+  <li>Descrição com <code>Pagamento efetuado - Fatura Cartão Inter</code> ou padrões <code>%Fatura Cartão%</code></li>
+</ul>
+<p><strong>Consequência:</strong> não há ligação formal ao cartão nem à fatura <code>YYYY-MM-01</code>. A ligação é <strong>inferida</strong> por texto e, em alguns lugares, por <strong>janela de datas</strong>.</p>
+
+<h3>3.4 Onde o dado é consumido hoje</h3>
+<table>
+  <thead><tr><th>Área</th><th>Onde</th><th>Regra atual</th></tr></thead>
+  <tbody>
+    <tr><td>Semana</td><td><code>getSemanaPagamentosFatura</code></td><td><code>despesa</code> na corrente, data na semana, <code>LIKE</code> na descrição</td></tr>
+    <tr><td>Página cartão</td><td><code>getPagamentosFaturaParaCiclo</code></td><td><code>despesa</code> + descrição + data entre <strong>fatura_ref − 7 dias</strong> e <strong>fatura_ref + 14 dias</strong></td></tr>
+    <tr><td>SQL agregações</td><td><code>SQL_PAGAMENTO_FATURA</code></td><td><code>LIKE</code> na descrição</td></tr>
+    <tr><td>Extrato</td><td><code>recent-lancamentos-table.tsx</code></td><td>Regras de saldo corrente + transferências</td></tr>
+  </tbody>
+</table>
+<p>Nenhum ponto usa hoje um <strong>ID estruturado da fatura-alvo</strong> vindo do próprio lançamento de pagamento.</p>
+
+<h3>3.5 Por que diverge do banco</h3>
+<ol>
+  <li>Pagamento fora da janela ±7/+14 em relação ao <code>YYYY-MM-01</code> usado na UI.</li>
+  <li>Pagamento que o banco aplica na fatura B foi inferido como fatura A.</li>
+  <li>Variação de texto (<code>Cartão</code> vs <code>Cartao</code>).</li>
+  <li>Dupla leitura: “só saiu da corrente” até cruzar heuristicamente com o cartão.</li>
+</ol>
+
+<h2>4. Modelo desejado (fonte única)</h2>
+<blockquote>Todo pagamento de fatura é um evento: saída de caixa (corrente) + redução de passivo (cartão), com referência explícita à fatura afetada.</blockquote>
+
+<h3>4.1 Registro recomendado (opção A — um lançamento)</h3>
+<ul>
+  <li><code>tipo = 'transferencia'</code></li>
+  <li><code>conta_id</code> = corrente (origem)</li>
+  <li><code>conta_destino_id</code> = conta cartão</li>
+  <li><code>valor_total</code> = valor pago</li>
+  <li><code>competencia_data</code> = data do débito no extrato</li>
+  <li><strong>Novo:</strong> <code>fatura_alvo_competencia_data DATE NULL</code> — primeiro dia do mês da fatura abatida (ex. <code>2026-05-01</code>); permite vários pagamentos parciais com o mesmo alvo.</li>
+  <li><code>descricao</code> legível para auditoria humana</li>
+</ul>
+
+<h3>4.2 Leitura unificada após migração</h3>
+<table>
+  <thead><tr><th>Área</th><th>Consulta</th></tr></thead>
+  <tbody>
+    <tr><td>Extrato corrente</td><td>Transferências com <code>conta_id</code> = corrente</td></tr>
+    <tr><td>Resumo cartão / fatura X</td><td><code>SUM</code> onde <code>conta_destino_id = cartão</code> e <code>fatura_alvo_competencia_data = X</code></td></tr>
+    <tr><td>Saldo em aberto fatura X</td><td><code>SUM(compras com fatura_competencia_data = X) − SUM(pagamentos com fatura_alvo = X)</code></td></tr>
+    <tr><td>Fechamento semanal</td><td>Mesma tabela; filtro por data da transferência na semana</td></tr>
+  </tbody>
+</table>
+<p><strong>Meta:</strong> não usar <code>LIKE '%Fatura Cartão%'</code> como regra principal (no máximo migração temporária).</p>
+
+<h3>4.3 Cruzamento de chaves</h3>
+<ul>
+  <li><strong>Compra:</strong> <code>fatura_competencia_data</code> = em qual fatura a dívida <strong>entrou</strong>.</li>
+  <li><strong>Pagamento:</strong> <code>fatura_alvo_competencia_data</code> = em qual fatura a dívida <strong>saiu</strong>.</li>
+</ul>
+
+<h2>5. Diagramas (texto)</h2>
+<h3>5.1 Hoje — inferência</h3>
+<pre class="diagram">┌─────────────────────┐         ┌─────────────────────┐
+│ Conta CORRENTE      │         │ Conta CARTÃO        │
+│ despesa "Fatura…"  │  ? ? ?  │ compras crédito     │
+│ destino = NULL     │────────▶│ fatura_competencia  │
+└─────────────────────┘         └─────────────────────┘
+        │                                   ▲
+        ├── Semana: LIKE + intervalo datas  │
+        ├── Cartão: janela fatura_ref±dias  │
+        └── SQL: LIKE em descrição           │
+             (regras diferentes)             │
+</pre>
+
+<h3>5.2 Desejado — referência explícita</h3>
+<pre class="diagram">CORRENTE ──transferencia OUT──▶ CARTÃO (destino)
+                                    │
+                    fatura_alvo_competencia_data = 2026-05-01
+                                    │
+                    COMPRAS com fatura_competencia_data = 2026-05-01
+                                    ▼
+                         Fatura 2026-05-01 (ciclo)
+</pre>
+
+<h2>6. Plano de migração (alto nível)</h2>
+<ol>
+  <li><strong>Migration:</strong> coluna <code>fatura_alvo_competencia_data</code> em <code>lancamentos</code>; atualizar <code>schema.sql</code>.</li>
+  <li><strong>Backfill:</strong> converter pagamentos atuais (despesa corrente) para <code>transferencia</code> corrente→cartão + preencher <code>fatura_alvo</code>; revisão humana em casos ambíguos.</li>
+  <li><strong>Writes:</strong> fechamento semanal, importação, IA, formulário — sempre gravam <code>fatura_alvo</code>.</li>
+  <li><strong>Reads:</strong> remover heurística de janela ±dias onde possível; somar por <code>fatura_alvo</code>.</li>
+  <li><strong>Validação:</strong> comparar cada fatura fechada com PDF do Inter (total e pagamentos).</li>
+</ol>
+
+<h2>7. Critérios de aceite</h2>
+<ul>
+  <li>PDF do banco: total <em>T</em> e pagamentos <em>P1…Pn</em> reproduzidos no app (±1 dia se fuso).</li>
+  <li>Nenhuma tela depende só de <code>LIKE</code> sem campo estruturado (exceto camada de migração).</li>
+  <li>Onboarding documenta: compra → <code>fatura_competencia_data</code>; pagamento → <code>fatura_alvo_competencia_data</code>.</li>
+</ul>
+
+<h2>8. Glossário</h2>
+<table>
+  <thead><tr><th>Termo</th><th>Significado</th></tr></thead>
+  <tbody>
+    <tr><td><code>fatura_competencia_data</code></td><td>Mês-ciclo (dia 01) em que a <strong>compra</strong> entrou na fatura</td></tr>
+    <tr><td><code>fatura_alvo_competencia_data</code> (proposto)</td><td>Mês-ciclo (dia 01) que o <strong>pagamento</strong> abate</td></tr>
+    <tr><td><code>fechamento_dia</code> / <code>vencimento_dia</code></td><td>Metadados do cartão; base para calcular fatura da compra</td></tr>
+  </tbody>
+</table>
+
+<h2>9. Referências de código</h2>
+<ul>
+  <li><code>apps/web/src/lib/server/repository.ts</code> — <code>getSemanaPagamentosFatura</code>, <code>getPagamentosFaturaParaCiclo</code>, <code>SQL_PAGAMENTO_FATURA</code>, <code>computeFaturaCompetenciaParaCompra</code>, <code>createLancamento</code></li>
+  <li><code>apps/web/src/app/dashboard/cartao/page.tsx</code></li>
+  <li><code>apps/web/src/app/dashboard/semana/page.tsx</code></li>
+  <li><code>apps/web/src/components/dashboard/recent-lancamentos-table.tsx</code></li>
+  <li><code>backend/database/scripts/seed_*_lote.sql</code></li>
+</ul>
+
+<h2>10. Arquivos entregues</h2>
+<table>
+  <thead><tr><th>Arquivo</th><th>Descrição</th></tr></thead>
+  <tbody>
+    <tr><td><code>docs/modelagem-pagamento-fatura-cartao-fonte-unica.md</code></td><td>Fonte Markdown</td></tr>
+    <tr><td><code>docs/modelagem-pagamento-fatura-cartao-fonte-unica.print.html</code></td><td>HTML para impressão / regenerar PDF</td></tr>
+    <tr><td><code>docs/modelagem-pagamento-fatura-cartao-fonte-unica.pdf</code></td><td><strong>PDF</strong> (este documento impresso)</td></tr>
+  </tbody>
+</table>
+<pre class="diagram">google-chrome --headless=new --disable-gpu --no-pdf-header-footer \
+  --print-to-pdf="docs/modelagem-pagamento-fatura-cartao-fonte-unica.pdf" \
+  "file://$PWD/docs/modelagem-pagamento-fatura-cartao-fonte-unica.print.html"</pre>
+
+<hr />
+<p style="font-size:9pt;color:#666;">LT CashFlow — documento técnico v1.0 (12/05/2026)</p>
+
+</body>
+</html>

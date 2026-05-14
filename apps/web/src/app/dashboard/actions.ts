@@ -7,7 +7,9 @@ import {
   createCategoriaSchema,
   createContaSchema,
   createGestaoSchema,
+  createGastoFixoSchema,
   createLancamentoSchema,
+  createParcelamentoCartaoSchema,
   createTransferenciaSchema,
   updateGestaoMemberRoleSchema,
   updateLancamentoSchema,
@@ -21,7 +23,9 @@ import {
   createCategoria,
   createConta,
   createGestaoWithDefaults,
+  createGastoFixo,
   createLancamento,
+  createParcelamentoNoCartao,
   createTransferencia,
   deleteLancamentos,
   updateCategoria,
@@ -239,6 +243,41 @@ export async function createCategoriaAction(formData: FormData) {
   redirect(dashboardUrl(gestaoId, categoriaId ? "categoria-atualizada" : "categoria-criada"));
 }
 
+export async function createGastoFixoAction(formData: FormData) {
+  const user = await getAuthenticatedUser();
+  const gestaoId = Number(formData.get("gestaoId"));
+  const anoMes = String(formData.get("anoMes") ?? new Date().toISOString().slice(0, 7));
+
+  if (!(await userCanMutateGestao(user.id, gestaoId))) {
+    redirect("/dashboard?status=acesso-negado");
+  }
+
+  const parsed = createGastoFixoSchema.safeParse({
+    contaId: formData.get("contaId"),
+    categoriaId: formData.get("categoriaId"),
+    nome: formData.get("nome"),
+    descricao: formData.get("descricao") || undefined,
+    valorEstimado: formData.get("valorEstimado"),
+    diaVencimento: formData.get("diaVencimento"),
+    meio: formData.get("meio") || undefined,
+  });
+
+  if (!parsed.success) {
+    redirect(dashboardUrl(gestaoId, "gasto-fixo-invalido"));
+  }
+
+  await createGastoFixo({
+    gestaoId,
+    userId: user.id,
+    ...parsed.data,
+    anoMes,
+  });
+
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/meses");
+  redirect(dashboardUrl(gestaoId, "gasto-fixo-criado"));
+}
+
 export async function createLancamentoAction(formData: FormData) {
   const user = await getAuthenticatedUser();
   const gestaoId = Number(formData.get("gestaoId"));
@@ -249,6 +288,44 @@ export async function createLancamentoAction(formData: FormData) {
 
   if (!(await userCanMutateGestao(user.id, gestaoId))) {
     redirect("/dashboard?status=acesso-negado");
+  }
+
+  if (formData.get("gerarParcelas") === "on") {
+    const tipo = String(formData.get("tipo") ?? "");
+    const meio = String(formData.get("meio") ?? "");
+    if (tipo !== "despesa" || meio !== "credito" || !competenciaData) {
+      redirect(dashboardUrl(gestaoId, "parcelamento-invalido"));
+    }
+
+    const parcelParsed = createParcelamentoCartaoSchema.safeParse({
+      contaId: formData.get("contaId"),
+      categoriaId: formData.get("categoriaId"),
+      status: formData.get("status"),
+      descricaoBase: formData.get("descricao"),
+      valorParcela: formData.get("valorTotal"),
+      totalParcelas: formData.get("totalParcelas"),
+      primeiraCompetenciaData: competenciaData,
+      competenciaHora,
+    });
+
+    if (!parcelParsed.success) {
+      redirect(dashboardUrl(gestaoId, "parcelamento-invalido"));
+    }
+
+    try {
+      await createParcelamentoNoCartao({
+        gestaoId,
+        userId: user.id,
+        ...parcelParsed.data,
+      });
+    } catch {
+      redirect(dashboardUrl(gestaoId, "parcelamento-invalido"));
+    }
+
+    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/meses");
+    revalidatePath("/dashboard/cartao");
+    redirect(dashboardUrl(gestaoId, "parcelamento-criado"));
   }
 
   const parsed = createLancamentoSchema.safeParse({
@@ -277,10 +354,54 @@ export async function createLancamentoAction(formData: FormData) {
   });
 
   revalidatePath("/dashboard");
-  revalidatePath("/dashboard/movimentacoes");
+  revalidatePath("/dashboard/meses");
   revalidatePath("/dashboard/cartao");
-  revalidatePath("/dashboard/insights");
   redirect(dashboardUrl(gestaoId, "lancamento-criado"));
+}
+
+export async function createParcelamentoCartaoAction(formData: FormData) {
+  const user = await getAuthenticatedUser();
+  const gestaoId = Number(formData.get("gestaoId"));
+  const primeiraCompetenciaData = normalizeDateInput(formData.get("primeiraCompetenciaData"));
+  const competenciaHora = normalizeTimeInput(formData.get("competenciaHora"));
+
+  if (!(await userCanMutateGestao(user.id, gestaoId))) {
+    redirect("/dashboard?status=acesso-negado");
+  }
+
+  if (!primeiraCompetenciaData) {
+    redirect(dashboardUrl(gestaoId, "parcelamento-invalido"));
+  }
+
+  const parsed = createParcelamentoCartaoSchema.safeParse({
+    contaId: formData.get("contaId"),
+    categoriaId: formData.get("categoriaId"),
+    status: formData.get("status"),
+    descricaoBase: formData.get("descricaoBase"),
+    valorParcela: formData.get("valorParcela"),
+    totalParcelas: formData.get("totalParcelas"),
+    primeiraCompetenciaData,
+    competenciaHora,
+  });
+
+  if (!parsed.success) {
+    redirect(dashboardUrl(gestaoId, "parcelamento-invalido"));
+  }
+
+  try {
+    await createParcelamentoNoCartao({
+      gestaoId,
+      userId: user.id,
+      ...parsed.data,
+    });
+  } catch {
+    redirect(dashboardUrl(gestaoId, "parcelamento-invalido"));
+  }
+
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/meses");
+  revalidatePath("/dashboard/cartao");
+  redirect(dashboardUrl(gestaoId, "parcelamento-criado"));
 }
 
 export async function createTransferenciaAction(formData: FormData) {
@@ -326,9 +447,8 @@ export async function createTransferenciaAction(formData: FormData) {
   });
 
   revalidatePath("/dashboard");
-  revalidatePath("/dashboard/movimentacoes");
+  revalidatePath("/dashboard/meses");
   revalidatePath("/dashboard/cartao");
-  revalidatePath("/dashboard/insights");
   redirect(dashboardUrl(gestaoId, "transferencia-criada"));
 }
 
@@ -397,9 +517,8 @@ export async function updateLancamentoAction(formData: FormData) {
   }
 
   revalidatePath("/dashboard");
-  revalidatePath("/dashboard/movimentacoes");
+  revalidatePath("/dashboard/meses");
   revalidatePath("/dashboard/cartao");
-  revalidatePath("/dashboard/insights");
   redirect(dashboardUrl(gestaoId, "lancamento-atualizado"));
 }
 
@@ -422,9 +541,8 @@ export async function deleteLancamentoAction(formData: FormData) {
   });
 
   revalidatePath("/dashboard");
-  revalidatePath("/dashboard/movimentacoes");
+  revalidatePath("/dashboard/meses");
   revalidatePath("/dashboard/cartao");
-  revalidatePath("/dashboard/insights");
   redirect(dashboardUrl(gestaoId, "lancamento-excluido"));
 }
 

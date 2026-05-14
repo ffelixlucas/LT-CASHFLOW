@@ -5,6 +5,7 @@ export const lancamentoMeioSchema = z.enum([
   "debito",
   "credito",
   "dinheiro",
+  "boleto",
   "ted_doc",
   "transferencia",
   "outro",
@@ -97,6 +98,27 @@ export const createLancamentoSchema = z.object({
   }
 });
 
+export const createParcelamentoCartaoSchema = z.object({
+  contaId: z.coerce.number().int().positive(),
+  categoriaId: z.coerce.number().int().positive(),
+  status: z.enum(["previsto", "pendente", "liquidado"]),
+  descricaoBase: z.string().min(3, "Descreva a compra.").max(160),
+  valorParcela: z.coerce.number().positive(),
+  totalParcelas: z.coerce.number().int().min(2).max(60),
+  primeiraCompetenciaData: z.string().min(10),
+  competenciaHora: lancamentoHoraSchema,
+});
+
+export const createGastoFixoSchema = z.object({
+  contaId: z.coerce.number().int().positive(),
+  categoriaId: z.coerce.number().int().positive(),
+  nome: z.string().min(2, "Informe o nome do gasto fixo.").max(120),
+  descricao: z.string().max(160).optional(),
+  valorEstimado: z.coerce.number().positive(),
+  diaVencimento: z.coerce.number().int().min(1).max(31),
+  meio: lancamentoMeioSchema.optional(),
+});
+
 export const createTransferenciaSchema = z
   .object({
     contaOrigemId: z.coerce.number().int().positive(),
@@ -164,6 +186,8 @@ export type CreateCategoriaInput = z.infer<typeof createCategoriaSchema>;
 export type CreateOnboardingInput = z.infer<typeof createOnboardingSchema>;
 export type CreateOnboardingContaInput = z.infer<typeof createOnboardingContaSchema>;
 export type CreateLancamentoInput = z.infer<typeof createLancamentoSchema>;
+export type CreateParcelamentoCartaoInput = z.infer<typeof createParcelamentoCartaoSchema>;
+export type CreateGastoFixoInput = z.infer<typeof createGastoFixoSchema>;
 export type CreateTransferenciaInput = z.infer<typeof createTransferenciaSchema>;
 export type UpdateLancamentoInput = z.infer<typeof updateLancamentoSchema>;
 export type LancamentoMeio = z.infer<typeof lancamentoMeioSchema>;

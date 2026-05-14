@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { auth } from "@/lib/server/auth";
+import { BrandLogo } from "@/components/brand/brand-logo";
 
 export default function Home() {
   return <HomeContent />;
@@ -14,12 +15,12 @@ async function HomeContent() {
       <div className="absolute inset-x-0 top-0 h-72 bg-linear-to-b from-accent-soft/60 to-transparent" />
 
       <section className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 py-8 sm:px-10 lg:px-12">
-        <header className="flex items-center justify-between border-b border-line pb-5">
+        <header className="flex flex-wrap items-end justify-between gap-4 border-b border-line pb-5">
           <div>
-            <p className="font-heading text-lg font-semibold tracking-[0.2em] uppercase">
-              LT CashFlow
-            </p>
-            <p className="text-sm text-muted">Base oficial da nova plataforma financeira.</p>
+            <Link className="inline-block" href="/" aria-label="LT CashFlow — início">
+              <BrandLogo priority variant="hero" />
+            </Link>
+            <p className="mt-3 max-w-md text-sm text-muted">Base oficial da nova plataforma financeira.</p>
           </div>
 
           <nav className="hidden items-center gap-6 text-sm text-muted md:flex">

@@ -18,6 +18,7 @@ tmp/
 # OS / logs
 .DS_Store
 *.log
+.~lock.*
 
 # Local agent instructions
 AGENTS.md

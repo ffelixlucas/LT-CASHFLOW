@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { SignOutButton } from "@/components/auth/sign-out-button";
+import { DashboardAppNav } from "@/components/dashboard/dashboard-app-nav";
 import { RecentLancamentosTable } from "@/components/dashboard/recent-lancamentos-table";
 import { requireUser } from "@/lib/server/auth";
 import {
@@ -260,12 +261,9 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {gestaoAtiva ? (
-                <Link
-                  className="inline-flex items-center justify-center rounded-full border border-line bg-background px-3.5 py-2 text-sm font-medium text-foreground"
-                  href={`/dashboard?gestao=${gestaoAtiva.id}`}
-                >
-                  Voltar ao dashboard
-                </Link>
+                <div className="flex flex-wrap items-center gap-2">
+                  <DashboardAppNav active={null} gestaoId={gestaoAtiva.id} />
+                </div>
               ) : null}
               <SignOutButton />
             </div>

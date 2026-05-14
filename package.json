@@ -8,6 +8,10 @@
     "lint": "pnpm --filter web lint",
     "typecheck": "pnpm --filter web typecheck && pnpm --filter @ltcashflow/db typecheck && pnpm --filter @ltcashflow/validation typecheck && pnpm --filter @ltcashflow/finance-core typecheck",
     "db:generate": "pnpm --filter @ltcashflow/db db:generate",
-    "db:migrate": "pnpm --filter @ltcashflow/db db:migrate"
+    "db:migrate": "pnpm --filter @ltcashflow/db db:migrate",
+    "docs:redesign-spec": "node scripts/generate-redesign-spec-docx.cjs"
+  },
+  "devDependencies": {
+    "docx": "^9.6.1"
   }
 }

@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import Image from "next/image";
 import { redirect } from "next/navigation";
 
+import { BrandLogo } from "@/components/brand/brand-logo";
 import { requireUser } from "@/lib/server/auth";
 
 import { createOnboardingAction } from "./actions";
@@ -42,15 +42,9 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
         <section className="rounded-[2rem] border border-line bg-surface p-4 sm:p-6">
           <form action={createOnboardingAction} className="space-y-2.5 sm:space-y-4">
             <div className="flex justify-center">
-              <Image
-                alt="LT CashFlow"
-                className="h-auto w-[180px] sm:w-[330px]"
-                height={319}
-                priority
-                sizes="(max-width: 640px) 180px, 330px"
-                src="/brand/ltcashflow-logo-horizontal-1-tight.png"
-                width={1198}
-              />
+              <Link aria-label="LT CashFlow" className="inline-block" href="/">
+                <BrandLogo priority variant="onboarding" />
+              </Link>
             </div>
 
             <div className="space-y-1">

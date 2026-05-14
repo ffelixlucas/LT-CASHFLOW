@@ -155,6 +155,39 @@ type SearchPlan = {
   answerHint: string;
 };
 
+type AssistantApiResponse = {
+  error?: string;
+  ok?: boolean;
+  id?: number;
+  ids?: number[];
+  duplicated?: boolean;
+  avisoDuplicidade?: string;
+  quantidade?: number;
+  updated?: number;
+  answer?: string;
+  provider?: string;
+  kind?:
+    | "search"
+    | "quick_add"
+    | "quick_add_batch"
+    | "account_create"
+    | "account_rename"
+    | "account_keep"
+    | "transactions_update"
+    | "transactions_date_update"
+    | "transactions_delete"
+    | "info"
+    | "quick_add_tool"
+    | "search_tool"
+    | "delete_tool";
+  results?: SearchResult[];
+  suggestion?: unknown;
+  plan?: SearchPlan;
+  toolDraft?: ToolDraftSuggestion;
+  toolSearchResults?: ToolSearchResult[];
+  toolDeleteDraft?: ToolDeleteDraft;
+};
+
 // Rascunho retornado pelo tool calling (criar_lancamento com confirmar: false)
 type ToolDraftSuggestion = {
   descricao: string;
@@ -267,6 +300,23 @@ function normalizeAssistantText(text: string) {
     .toLowerCase();
 }
 
+function hasMoneyAmount(text: string) {
+  return /(?:R\$\s*)?\b\d{1,3}(?:\.\d{3})*,\d{2}\b|\b\d+[,.]\d{1,2}\b|\b(?:de|por|valor)\s+\d+\b/i.test(
+    text,
+  );
+}
+
+function looksLikeNewLancamentoPrompt(text: string) {
+  const normalized = normalizeAssistantText(text);
+
+  return (
+    hasMoneyAmount(text) &&
+    /\b(lanca|lança|entrada|receita|compra|comprei|gasto|gastei|despesa|paguei|pagamento|pix|debito|credito|dinheiro)\b/.test(
+      normalized,
+    )
+  );
+}
+
 function looksLikeDraftTimeEdit(text: string) {
   const normalized = normalizeAssistantText(text);
 
@@ -348,10 +398,27 @@ function isDraftFieldEdit(text: string) {
   const normalized = normalizeAssistantText(text);
 
   return (
-    /\b(categoria|conta|cartao|credito|debito|pix|meio)\b/.test(normalized) ||
+    (/\b(ajusta|ajuste|muda|mude|altera|altere|corrige|corrija|troca|troque|editar|edita|edite)\b/.test(
+      normalized,
+    ) &&
+      /\b(rascunho|categoria|conta|cartao|credito|debito|pix|meio)\b/.test(normalized)) ||
     /\b(ta|esta|ficou)\s+(errado|errada)\b/.test(normalized) ||
     /\b(nao|não)\b/.test(normalized)
   );
+}
+
+async function readJsonResponse<T>(response: Response): Promise<T> {
+  const text = await response.text();
+
+  if (!text.trim()) {
+    return {} as T;
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return {} as T;
+  }
 }
 
 const HISTORY_KEY = "ltcashflow-assistant-history";
@@ -735,7 +802,7 @@ export function GlobalAssistant({
   }
 
   function applyDraftFieldEdit(rawPrompt: string, userMessage: AssistantMessage) {
-    if (!isDraftFieldEdit(rawPrompt)) {
+    if (looksLikeNewLancamentoPrompt(rawPrompt) || !isDraftFieldEdit(rawPrompt)) {
       return false;
     }
 
@@ -853,7 +920,7 @@ export function GlobalAssistant({
         }),
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse<AssistantApiResponse>(response);
 
       if (!response.ok) {
         throw new Error(data.error ?? "Falha ao consultar o assistente.");
@@ -867,7 +934,7 @@ export function GlobalAssistant({
       const assistantMessage: AssistantMessage = {
         id: messageId(),
         role: "assistant",
-        text: data.answer,
+        text: data.answer ?? "Sem resposta.",
         provider: data.provider ?? "groq",
         kind: toolDraft
           ? "quick_add_tool"
@@ -877,7 +944,19 @@ export function GlobalAssistant({
               ? "search_tool"
               : (data.kind ?? "info"),
         results: data.results,
-        suggestion: toolDraft ?? data.suggestion,
+        suggestion:
+          toolDraft ??
+          (data.suggestion as
+            | QuickAddSuggestion
+            | QuickAddBatchSuggestion
+            | CreateAccountSuggestion
+            | RenameAccountSuggestion
+            | KeepAccountsSuggestion
+            | UpdateLancamentosSuggestion
+            | UpdateLancamentosDataSuggestion
+            | DeleteLancamentosSuggestion
+            | ToolDraftSuggestion
+            | undefined),
         plan: data.plan,
         ...(toolSearchResults ? { toolSearchResults } : {}),
         ...(toolDeleteDraft ? { toolDeleteDraft } : {}),
@@ -943,7 +1022,7 @@ export function GlobalAssistant({
         }),
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse<AssistantApiResponse>(response);
 
       if (!response.ok) {
         throw new Error(data.error ?? "Nao foi possivel salvar o lancamento.");
@@ -954,7 +1033,14 @@ export function GlobalAssistant({
         {
           id: messageId(),
           role: "assistant",
-          text: "Lancamento salvo com sucesso. Atualizei a base da gestao.",
+          text: data.duplicated
+            ? `Esse lancamento ja existia${data.id ? ` (ID: ${data.id})` : ""}. Nao criei outro.`
+            : [
+                "Lancamento salvo com sucesso. Atualizei a base da gestao.",
+                data.avisoDuplicidade,
+              ]
+                .filter(Boolean)
+                .join("\n"),
           provider: "info",
           kind: "info",
         },
@@ -999,7 +1085,7 @@ export function GlobalAssistant({
         }),
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse<AssistantApiResponse>(response);
 
       if (!response.ok) {
         throw new Error(data.error ?? "Nao foi possivel salvar o lote de lancamentos.");
@@ -1053,7 +1139,7 @@ export function GlobalAssistant({
         }),
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse<AssistantApiResponse>(response);
 
       if (!response.ok) {
         throw new Error(data.error ?? "Nao foi possivel criar a origem.");
@@ -1104,7 +1190,7 @@ export function GlobalAssistant({
         }),
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse<AssistantApiResponse>(response);
 
       if (!response.ok) {
         throw new Error(data.error ?? "Nao foi possivel renomear a origem.");
@@ -1155,7 +1241,7 @@ export function GlobalAssistant({
         }),
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse<AssistantApiResponse>(response);
 
       if (!response.ok) {
         throw new Error(data.error ?? "Nao foi possivel ajustar as origens ativas.");
@@ -1208,7 +1294,7 @@ export function GlobalAssistant({
         }),
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse<AssistantApiResponse>(response);
 
       if (!response.ok) {
         throw new Error(data.error ?? "Nao foi possivel editar os lancamentos.");
@@ -1266,7 +1352,7 @@ export function GlobalAssistant({
         }),
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse<AssistantApiResponse>(response);
 
       if (!response.ok) {
         throw new Error(data.error ?? "Nao foi possivel ajustar a data dos lancamentos.");
@@ -1324,7 +1410,7 @@ export function GlobalAssistant({
         }),
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse<AssistantApiResponse>(response);
 
       if (!response.ok) {
         throw new Error(data.error ?? "Nao foi possivel apagar os lancamentos.");
@@ -1389,7 +1475,7 @@ export function GlobalAssistant({
         }),
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse<AssistantApiResponse>(response);
 
       if (!response.ok) {
         throw new Error(data.error ?? "Nao foi possivel salvar o lancamento.");
@@ -1400,7 +1486,14 @@ export function GlobalAssistant({
         {
           id: messageId(),
           role: "assistant",
-          text: data.ok ? "Lancamento salvo com sucesso. Atualizei a base da gestao." : "Lancamento salvo.",
+          text: data.duplicated
+            ? `Esse lancamento ja existia${data.id ? ` (ID: ${data.id})` : ""}. Nao criei outro.`
+            : [
+                data.ok ? "Lancamento salvo com sucesso. Atualizei a base da gestao." : "Lancamento salvo.",
+                data.avisoDuplicidade,
+              ]
+                .filter(Boolean)
+                .join("\n"),
           provider: "info",
           kind: "info" as const,
         },
@@ -1448,7 +1541,7 @@ export function GlobalAssistant({
         }),
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse<AssistantApiResponse>(response);
 
       if (!response.ok) {
         throw new Error(data.error ?? "Nao foi possivel apagar os lancamentos.");
@@ -1487,7 +1580,7 @@ export function GlobalAssistant({
       <button
         aria-expanded={open}
         aria-label={open ? "Fechar assistente de IA" : "Abrir assistente de IA"}
-        className="fixed right-4 bottom-24 z-[60] flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-foreground text-white shadow-[0_12px_40px_rgba(30,42,47,0.28)] ring-2 ring-white/15 transition-transform hover:scale-[1.04] active:scale-[0.98] sm:right-6 sm:bottom-28 sm:h-[3.75rem] sm:w-[3.75rem]"
+        className="fixed right-56 bottom-4 z-[56] flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-foreground text-white shadow-[0_12px_40px_rgba(30,42,47,0.28)] ring-2 ring-white/15 transition-transform hover:scale-[1.04] active:scale-[0.98] sm:right-60 sm:bottom-6 sm:h-[3.75rem] sm:w-[3.75rem]"
         onClick={() => setOpen((current) => !current)}
         title={open ? "Fechar assistente" : "Assistente IA"}
         type="button"
@@ -1503,7 +1596,7 @@ export function GlobalAssistant({
       />
 
       <aside
-        className={`fixed inset-y-0 right-0 z-40 flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden border-l border-line bg-surface shadow-[0_0_60px_rgba(30,42,47,0.12)] transition-transform duration-300 sm:max-w-md ${
+        className={`fixed inset-y-0 right-0 z-[62] flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden border-l border-line bg-surface shadow-[0_0_60px_rgba(30,42,47,0.12)] transition-transform duration-300 sm:max-w-md ${
           open ? "translate-x-0" : "translate-x-full"
         }`}
       >

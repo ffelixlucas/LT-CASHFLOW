@@ -100,3 +100,27 @@ export function normalizeTimeInput(value: FormDataEntryValue | string | null | u
 
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
+
+/** `YYYY-MM-DD` avançado em `deltaMonths`, mantendo o dia quando existir no mês alvo (ex.: 31 → fev). */
+export function addCalendarMonths(isoDate: string, deltaMonths: number): string {
+  if (!Number.isFinite(deltaMonths) || deltaMonths === 0) {
+    return isoDate;
+  }
+
+  const m = isoDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) {
+    return isoDate;
+  }
+
+  const y = Number(m[1]);
+  const mo0 = Number(m[2]) - 1;
+  const day = Number(m[3]);
+  const targetFirst = new Date(Date.UTC(y, mo0 + deltaMonths, 1));
+  const yOut = targetFirst.getUTCFullYear();
+  const moOut = targetFirst.getUTCMonth();
+  const lastDay = new Date(Date.UTC(yOut, moOut + 1, 0)).getUTCDate();
+  const dayClamped = Math.min(day, lastDay);
+  const out = new Date(Date.UTC(yOut, moOut, dayClamped));
+
+  return `${out.getUTCFullYear()}-${String(out.getUTCMonth() + 1).padStart(2, "0")}-${String(out.getUTCDate()).padStart(2, "0")}`;
+}
