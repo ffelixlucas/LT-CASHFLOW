@@ -783,6 +783,76 @@ a {
   padding-top: 12px;
 }
 
+.fixed-suggestion-box summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  list-style: none;
+  margin-bottom: 4px;
+}
+
+.fixed-suggestion-box summary::-webkit-details-marker {
+  display: none;
+}
+
+.gastos-fixos-mes-entry {
+  margin-bottom: 10px;
+  margin-top: 18px;
+}
+
+.gastos-fixos-mes-card {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 10px 26px rgba(16, 24, 40, 0.05);
+  color: var(--foreground);
+  cursor: pointer;
+  display: inline-flex;
+  gap: 16px;
+  max-width: 100%;
+  padding: 16px 20px;
+  text-align: left;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.12s ease;
+}
+
+.gastos-fixos-mes-card:hover:not(:disabled) {
+  border-color: rgba(15, 23, 42, 0.18);
+  box-shadow: 0 12px 28px rgba(16, 24, 40, 0.08);
+  transform: translateY(-1px);
+}
+
+.gastos-fixos-mes-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.gastos-fixos-mes-card-icon {
+  color: var(--foreground);
+  flex-shrink: 0;
+  line-height: 0;
+  opacity: 0.92;
+}
+
+.gastos-fixos-mes-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.gastos-fixos-mes-card-title {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.gastos-fixos-mes-card-hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .fixed-suggestion-row {
   align-items: center;
   background: var(--surface);

@@ -1,7 +1,9 @@
 import "server-only";
 
-import type { LancamentoMeio } from "@ltcashflow/validation";
-import { addCalendarMonths } from "@/lib/date";
+import { planoFixosMesItemSchema } from "@ltcashflow/validation";
+import type { LancamentoMeio, PlanoFixosMesItem } from "@ltcashflow/validation";
+import { z } from "zod";
+import { addCalendarMonths, buildMonthCalendarDate } from "@/lib/date";
 import { pool } from "@ltcashflow/db";
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 
@@ -1101,14 +1103,6 @@ export function computeFaturaCompetenciaParaCompra(
   return `${targetYear}-${String(targetMonth).padStart(2, "0")}-01`;
 }
 
-function monthDateFromDay(anoMes: string, day: number) {
-  const [yearRaw, monthRaw] = anoMes.split("-").map(Number);
-  const year = yearRaw ?? new Date().getFullYear();
-  const month = monthRaw ?? new Date().getMonth() + 1;
-  const lastDay = new Date(year, month, 0).getDate();
-  return `${year}-${String(month).padStart(2, "0")}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
-}
-
 export async function createLancamento(input: {
   gestaoId: number;
   contaId: number;
@@ -1473,7 +1467,7 @@ export async function ensureGastoFixoLancamentoMes(input: {
     return Number(reuseId);
   }
 
-  const data = monthDateFromDay(input.anoMes, Number(gasto.dia_vencimento));
+  const data = buildMonthCalendarDate(input.anoMes, Number(gasto.dia_vencimento));
   const id = await createLancamento({
     gestaoId: input.gestaoId,
     userId: input.userId,
@@ -1728,6 +1722,326 @@ export async function fetchGastosFixosDashboardSlice(input: {
     }
     throw error;
   }
+}
+
+function parsePlanoFixosMesItensFromDb(raw: unknown): PlanoFixosMesItem[] {
+  if (raw == null) {
+    return [];
+  }
+  let data: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      data = JSON.parse(raw) as unknown;
+    } catch {
+      return [];
+    }
+  }
+  const parsed = z.array(planoFixosMesItemSchema).safeParse(data);
+  return parsed.success ? parsed.data : [];
+}
+
+export async function getPlanoFixosMesItens(gestaoId: number, anoMes: string): Promise<PlanoFixosMesItem[]> {
+  try {
+    const [rows] = await pool.query<Array<RowDataPacket & { itens: unknown }>>(
+      `
+        SELECT itens
+        FROM gestao_planos_fixos_mes
+        WHERE gestao_id = ?
+          AND ano_mes = ?
+        LIMIT 1
+      `,
+      [gestaoId, anoMes],
+    );
+    return parsePlanoFixosMesItensFromDb(rows[0]?.itens);
+  } catch (error) {
+    if (isErNoSuchTableFor(error, "gestao_planos_fixos_mes")) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+export async function upsertPlanoFixosMes(input: {
+  gestaoId: number;
+  userId: number;
+  anoMes: string;
+  itens: PlanoFixosMesItem[];
+}) {
+  await pool.query(
+    `
+      INSERT INTO gestao_planos_fixos_mes (gestao_id, ano_mes, itens, atualizado_por_usuario_id)
+      VALUES (?, ?, CAST(? AS JSON), ?)
+      ON DUPLICATE KEY UPDATE
+        itens = VALUES(itens),
+        atualizado_por_usuario_id = VALUES(atualizado_por_usuario_id)
+    `,
+    [input.gestaoId, input.anoMes, JSON.stringify(input.itens), input.userId],
+  );
+
+  await registerAudit({
+    userId: input.userId,
+    gestaoId: input.gestaoId,
+    action: "upsert",
+    module: "gestao_planos_fixos_mes",
+    entity: "plano_fixos_mes",
+    entityId: 0,
+    details: { anoMes: input.anoMes, linhas: input.itens.length },
+  });
+}
+
+/**
+ * Modelo (macro) por gestão: não gera lançamento até `syncLancamentosPrevistosFromPlanoFixosMes`.
+ * Se a tabela nova ainda não existir ou estiver vazia, tenta o último plano salvo em `gestao_planos_fixos_mes`.
+ */
+export async function getPlanoFixosTemplateItens(gestaoId: number): Promise<PlanoFixosMesItem[]> {
+  try {
+    const [rows] = await pool.query<Array<RowDataPacket & { itens: unknown }>>(
+      `
+        SELECT itens
+        FROM gestao_planos_fixos_template
+        WHERE gestao_id = ?
+        LIMIT 1
+      `,
+      [gestaoId],
+    );
+    const parsed = parsePlanoFixosMesItensFromDb(rows[0]?.itens);
+    if (parsed.length > 0) {
+      return parsed;
+    }
+  } catch (error) {
+    if (!isErNoSuchTableFor(error, "gestao_planos_fixos_template")) {
+      throw error;
+    }
+  }
+
+  try {
+    const [rows] = await pool.query<Array<RowDataPacket & { itens: unknown }>>(
+      `
+        SELECT itens
+        FROM gestao_planos_fixos_mes
+        WHERE gestao_id = ?
+        ORDER BY atualizado_em DESC
+        LIMIT 1
+      `,
+      [gestaoId],
+    );
+    return parsePlanoFixosMesItensFromDb(rows[0]?.itens);
+  } catch (error) {
+    if (isErNoSuchTableFor(error, "gestao_planos_fixos_mes")) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+export async function upsertPlanoFixosTemplate(input: {
+  gestaoId: number;
+  userId: number;
+  itens: PlanoFixosMesItem[];
+}) {
+  try {
+    await pool.query(
+      `
+      INSERT INTO gestao_planos_fixos_template (gestao_id, itens, atualizado_por_usuario_id)
+      VALUES (?, CAST(? AS JSON), ?)
+      ON DUPLICATE KEY UPDATE
+        itens = VALUES(itens),
+        atualizado_por_usuario_id = VALUES(atualizado_por_usuario_id)
+    `,
+      [input.gestaoId, JSON.stringify(input.itens), input.userId],
+    );
+  } catch (error) {
+    if (isErNoSuchTableFor(error, "gestao_planos_fixos_template")) {
+      throw Object.assign(new Error("gestao_planos_fixos_template ausente"), { code: "PLANO_FIXOS_TEMPLATE_TABLE" });
+    }
+    throw error;
+  }
+
+  await registerAudit({
+    userId: input.userId,
+    gestaoId: input.gestaoId,
+    action: "upsert",
+    module: "gestao_planos_fixos_template",
+    entity: "plano_fixos_template",
+    entityId: 0,
+    details: { linhas: input.itens.length },
+  });
+}
+
+async function resolveFaturaCompetenciaDespesa(
+  gestaoId: number,
+  contaId: number,
+  competenciaData: string,
+): Promise<string | null> {
+  const [contaRows] = await pool.query<Array<RowDataPacket & { tipo: string; fechamento_dia: number | null }>>(
+    `SELECT tipo, fechamento_dia FROM contas WHERE id = ? AND gestao_id = ? LIMIT 1`,
+    [contaId, gestaoId],
+  );
+  const contaInfo = contaRows[0];
+  if (contaInfo?.tipo === "cartao_credito") {
+    const fechamentoDia = Number(contaInfo.fechamento_dia ?? 1);
+    if (fechamentoDia >= 1 && fechamentoDia <= 31) {
+      return computeFaturaCompetenciaParaCompra(competenciaData, fechamentoDia);
+    }
+  }
+  return null;
+}
+
+async function findLancamentoPlanoFixoIdx(
+  gestaoId: number,
+  anoMes: string,
+  planoIdx: number,
+): Promise<{ id: number; status: string; competencia_hora: string | null } | null> {
+  const [rows] = await pool.query<
+    Array<RowDataPacket & { id: number; status: string; competencia_hora: string | null }>
+  >(
+    `
+      SELECT id, status, TIME_FORMAT(competencia_hora, '%H:%i') AS competencia_hora
+      FROM lancamentos
+      WHERE gestao_id = ?
+        AND tipo = 'despesa'
+        AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(metadados, '$.origem')), '') = 'plano_fixos_mes'
+        AND JSON_UNQUOTE(JSON_EXTRACT(metadados, '$.ano_mes')) = ?
+        AND CAST(JSON_UNQUOTE(JSON_EXTRACT(metadados, '$.plano_idx')) AS UNSIGNED) = ?
+      LIMIT 1
+    `,
+    [gestaoId, anoMes, planoIdx],
+  );
+  const row = rows[0];
+  if (!row) {
+    return null;
+  }
+  return { id: Number(row.id), status: String(row.status), competencia_hora: row.competencia_hora };
+}
+
+async function assertContaCategoriaNaGestao(gestaoId: number, contaId: number, categoriaId: number): Promise<boolean> {
+  const [[c], [g]] = await Promise.all([
+    pool.query<Array<RowDataPacket & { ok: number }>>(
+      `SELECT 1 AS ok FROM contas WHERE id = ? AND gestao_id = ? LIMIT 1`,
+      [contaId, gestaoId],
+    ),
+    pool.query<Array<RowDataPacket & { ok: number }>>(
+      `SELECT 1 AS ok FROM categorias WHERE id = ? AND gestao_id = ? LIMIT 1`,
+      [categoriaId, gestaoId],
+    ),
+  ]);
+  return Boolean(c[0]?.ok && g[0]?.ok);
+}
+
+export async function syncLancamentosPrevistosFromPlanoFixosMes(input: {
+  gestaoId: number;
+  userId: number;
+  /** Mês de competência dos lançamentos (AAAA-MM). */
+  anoMes: string;
+}): Promise<{ created: number; updated: number; skipped: number }> {
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  const itens = await getPlanoFixosTemplateItens(input.gestaoId);
+  if (itens.length === 0) {
+    return { created, updated, skipped };
+  }
+
+  for (const [idx, item] of itens.entries()) {
+    const okRefs = await assertContaCategoriaNaGestao(input.gestaoId, item.contaId, item.categoriaId);
+    if (!okRefs) {
+      skipped += 1;
+      continue;
+    }
+
+    let competenciaData: string;
+    if (
+      item.competenciaData &&
+      /^\d{4}-\d{2}-\d{2}$/.test(item.competenciaData) &&
+      item.competenciaData.startsWith(`${input.anoMes}-`)
+    ) {
+      competenciaData = item.competenciaData;
+    } else {
+      competenciaData = buildMonthCalendarDate(input.anoMes, item.dia);
+    }
+
+    const anoMesChave = competenciaData.slice(0, 7);
+    const vencimentoData = competenciaData;
+    const descricao = item.nome.trim();
+    const meio = item.meio ?? undefined;
+    const metadados = JSON.stringify({
+      origem: "plano_fixos_mes",
+      ano_mes: anoMesChave,
+      plano_idx: idx,
+    });
+
+    const existing = await findLancamentoPlanoFixoIdx(input.gestaoId, anoMesChave, idx);
+
+    if (existing) {
+      if (existing.status !== "previsto") {
+        skipped += 1;
+        continue;
+      }
+
+      const faturaCompetenciaData = await resolveFaturaCompetenciaDespesa(
+        input.gestaoId,
+        item.contaId,
+        competenciaData,
+      );
+
+      const ok = await updateLancamento({
+        gestaoId: input.gestaoId,
+        userId: input.userId,
+        lancamentoId: existing.id,
+        contaId: item.contaId,
+        categoriaId: item.categoriaId,
+        tipo: "despesa",
+        status: "previsto",
+        meio,
+        descricao,
+        valorTotal: item.valor,
+        competenciaData,
+        faturaCompetenciaData: faturaCompetenciaData ?? undefined,
+        competenciaHora: existing.competencia_hora ?? undefined,
+        vencimentoData,
+      });
+      if (ok) {
+        await pool.query(`UPDATE lancamentos SET metadados = ? WHERE id = ? AND gestao_id = ?`, [
+          metadados,
+          existing.id,
+          input.gestaoId,
+        ]);
+        updated += 1;
+      } else {
+        skipped += 1;
+      }
+      continue;
+    }
+
+    const id = await createLancamento({
+      gestaoId: input.gestaoId,
+      userId: input.userId,
+      contaId: item.contaId,
+      categoriaId: item.categoriaId,
+      tipo: "despesa",
+      status: "previsto",
+      meio,
+      descricao,
+      valorTotal: item.valor,
+      competenciaData,
+      vencimentoData,
+    });
+
+    await pool.query(
+      `
+        UPDATE lancamentos
+        SET recorrente = 0,
+            metadados = ?
+        WHERE id = ?
+          AND gestao_id = ?
+      `,
+      [metadados, id, input.gestaoId],
+    );
+    created += 1;
+  }
+
+  return { created, updated, skipped };
 }
 
 export type RepairGastosFixoPrevistosResult = {

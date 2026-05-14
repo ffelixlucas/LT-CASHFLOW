@@ -119,6 +119,35 @@ export const createGastoFixoSchema = z.object({
   meio: lancamentoMeioSchema.optional(),
 });
 
+/** Linha do modelo (macro) de gastos fixos — não contabiliza até lançar no mês escolhido. */
+export const planoFixosMesItemSchema = z.object({
+  nome: z.string().min(1, "Informe o nome.").max(120),
+  valor: z.coerce.number().positive(),
+  dia: z.coerce.number().int().min(1).max(31),
+  contaId: z.coerce.number().int().positive(),
+  categoriaId: z.coerce.number().int().positive(),
+  meio: lancamentoMeioSchema.optional().nullable(),
+  /** `YYYY-MM-DD` opcional; se ausente, usa mês de destino + `dia` ao lançar. */
+  competenciaData: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+});
+
+/** Salva só o modelo na gestão (não cria lançamento). */
+export const savePlanoFixosTemplateSchema = z.object({
+  gestaoId: z.coerce.number().int().positive(),
+  itens: z.array(planoFixosMesItemSchema).max(40),
+});
+
+export const gerarPrevistosPlanoFixosMesSchema = z.object({
+  gestaoId: z.coerce.number().int().positive(),
+  /** Mês em que os previstos serão criados (competência). */
+  anoMesDestino: z.string().regex(/^\d{4}-\d{2}$/, "Use o formato AAAA-MM."),
+  /** Se enviado, atualiza o modelo antes de gerar (mesmo clique). */
+  itens: z.array(planoFixosMesItemSchema).max(40).optional(),
+});
+
 export const createTransferenciaSchema = z
   .object({
     contaOrigemId: z.coerce.number().int().positive(),
@@ -188,6 +217,9 @@ export type CreateOnboardingContaInput = z.infer<typeof createOnboardingContaSch
 export type CreateLancamentoInput = z.infer<typeof createLancamentoSchema>;
 export type CreateParcelamentoCartaoInput = z.infer<typeof createParcelamentoCartaoSchema>;
 export type CreateGastoFixoInput = z.infer<typeof createGastoFixoSchema>;
+export type PlanoFixosMesItem = z.infer<typeof planoFixosMesItemSchema>;
+export type SavePlanoFixosTemplateInput = z.infer<typeof savePlanoFixosTemplateSchema>;
+export type GerarPrevistosPlanoFixosMesInput = z.infer<typeof gerarPrevistosPlanoFixosMesSchema>;
 export type CreateTransferenciaInput = z.infer<typeof createTransferenciaSchema>;
 export type UpdateLancamentoInput = z.infer<typeof updateLancamentoSchema>;
 export type LancamentoMeio = z.infer<typeof lancamentoMeioSchema>;

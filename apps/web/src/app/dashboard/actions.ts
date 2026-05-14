@@ -11,6 +11,8 @@ import {
   createLancamentoSchema,
   createParcelamentoCartaoSchema,
   createTransferenciaSchema,
+  gerarPrevistosPlanoFixosMesSchema,
+  savePlanoFixosTemplateSchema,
   updateGestaoMemberRoleSchema,
   updateLancamentoSchema,
 } from "@ltcashflow/validation";
@@ -27,6 +29,9 @@ import {
   createLancamento,
   createParcelamentoNoCartao,
   createTransferencia,
+  syncLancamentosPrevistosFromPlanoFixosMes,
+  getPlanoFixosTemplateItens,
+  upsertPlanoFixosTemplate,
   deleteLancamentos,
   repairGestaoGastosFixoPrevistosDuplicados,
   updateCategoria,
@@ -277,6 +282,67 @@ export async function createGastoFixoAction(formData: FormData) {
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/meses");
   redirect(dashboardUrl(gestaoId, "gasto-fixo-criado"));
+}
+
+export async function savePlanoFixosMesAction(payload: unknown) {
+  const user = await getAuthenticatedUser();
+  const parsed = savePlanoFixosTemplateSchema.safeParse(payload);
+  if (!parsed.success) {
+    redirect("/dashboard?status=plano-fixos-invalido");
+  }
+
+  const { gestaoId, itens } = parsed.data;
+  if (!(await userCanMutateGestao(user.id, gestaoId))) {
+    redirect("/dashboard?status=acesso-negado");
+  }
+
+  try {
+    await upsertPlanoFixosTemplate({ gestaoId, userId: user.id, itens });
+  } catch (error) {
+    const code = typeof error === "object" && error !== null ? (error as { code?: string }).code : undefined;
+    if (code === "PLANO_FIXOS_TEMPLATE_TABLE") {
+      redirect(dashboardUrl(gestaoId, "plano-fixos-migration"));
+    }
+    throw error;
+  }
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/meses");
+  redirect(dashboardUrl(gestaoId, "plano-fixos-salvo"));
+}
+
+export async function gerarPrevistosPlanoFixosMesAction(payload: unknown) {
+  const user = await getAuthenticatedUser();
+  const parsed = gerarPrevistosPlanoFixosMesSchema.safeParse(payload);
+  if (!parsed.success) {
+    redirect("/dashboard?status=plano-fixos-invalido");
+  }
+
+  const { gestaoId, anoMesDestino, itens } = parsed.data;
+  if (!(await userCanMutateGestao(user.id, gestaoId))) {
+    redirect("/dashboard?status=acesso-negado");
+  }
+
+  if (itens && itens.length > 0) {
+    try {
+      await upsertPlanoFixosTemplate({ gestaoId, userId: user.id, itens });
+    } catch (error) {
+      const code = typeof error === "object" && error !== null ? (error as { code?: string }).code : undefined;
+      if (code === "PLANO_FIXOS_TEMPLATE_TABLE") {
+        redirect(dashboardUrl(gestaoId, "plano-fixos-migration"));
+      }
+      throw error;
+    }
+  }
+
+  const planoAtual = await getPlanoFixosTemplateItens(gestaoId);
+  if (planoAtual.length === 0) {
+    redirect(dashboardUrl(gestaoId, "plano-fixos-vazio"));
+  }
+
+  await syncLancamentosPrevistosFromPlanoFixosMes({ gestaoId, userId: user.id, anoMes: anoMesDestino });
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/meses");
+  redirect(dashboardUrl(gestaoId, "plano-fixos-gerados"));
 }
 
 export async function createLancamentoAction(formData: FormData) {

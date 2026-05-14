@@ -3,18 +3,19 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { computeCardStatement } from "@ltcashflow/finance-core";
 
-import { createGastoFixoAction } from "@/app/dashboard/actions";
 import { SignOutButton } from "@/components/auth/sign-out-button";
 import { BrandLogo } from "@/components/brand/brand-logo";
 import { CategoryDrilldown } from "@/components/dashboard/category-drilldown";
 import { DashboardActionCenter } from "@/components/dashboard/dashboard-action-center";
 import { DashboardAppNav } from "@/components/dashboard/dashboard-app-nav";
+import { PlanoFixosMesModal } from "@/components/dashboard/plano-fixos-mes-modal";
 import { requireUser } from "@/lib/server/auth";
 import {
   getContaCorrentePeriodoResumo,
   getGestaoInsights,
   getGestaoSaldosPorBucket,
   fetchGastosFixosDashboardSlice,
+  getPlanoFixosTemplateItens,
   listCashAccountBreakdown,
   listCreditCardStatementData,
   listCategorias,
@@ -61,6 +62,11 @@ const statusMessages: Record<string, string> = {
   "membro-atualizado": "Papel do membro atualizado com sucesso.",
   "gasto-fixo-criado": "Gasto fixo cadastrado e previsto para este mês.",
   "gasto-fixo-invalido": "Revise os dados do gasto fixo.",
+  "plano-fixos-salvo": "Modelo de gastos fixos salvo (ainda não gera lançamentos).",
+  "plano-fixos-gerados": "Gastos fixos lançados como previstos no mês escolhido.",
+  "plano-fixos-vazio": "Inclua ao menos uma linha válida no plano manual antes de gerar previstos.",
+  "plano-fixos-migration": "Rode a migration do banco (tabela gestao_planos_fixos_template) para salvar o modelo de gastos fixos.",
+  "plano-fixos-invalido": "Revise os dados do plano manual.",
 };
 
 function money(value: string | number | null | undefined) {
@@ -246,11 +252,14 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     dateTo: periodoAtual.to,
   });
   const cartoesComCiclo = await listCreditCardStatementData(gestaoAtiva.id);
-  const { gastosFixos, sugestoesFixos } = await fetchGastosFixosDashboardSlice({
-    gestaoId: gestaoAtiva.id,
-    userId: user.id,
-    anoMes: anoMesAtual,
-  });
+  const [, planoFixosTemplateItens] = await Promise.all([
+    fetchGastosFixosDashboardSlice({
+      gestaoId: gestaoAtiva.id,
+      userId: user.id,
+      anoMes: anoMesAtual,
+    }),
+    getPlanoFixosTemplateItens(gestaoAtiva.id),
+  ]);
   const baseRealFrom = gestaoAtiva.inicio_em
     ? new Date(gestaoAtiva.inicio_em).toISOString().slice(0, 10)
     : periodoAno.from;
@@ -335,11 +344,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const ultimosLancamentos = lancamentosPeriodo.slice(0, 6);
   const projectionBalance =
     insightsMes ? Number(insightsMes.receitasMesAtual) - Number(insightsMes.projecaoDespesaFimMes) : null;
-  const fixosPrevistos = gastosFixos.reduce((total, item) => total + Number(item.valor_estimado ?? 0), 0);
-  const fixosPagos = gastosFixos
-    .filter((item) => item.lancamento_mes_status === "liquidado")
-    .reduce((total, item) => total + Number(item.valor_estimado ?? 0), 0);
-  const fixosEmAberto = Math.max(0, fixosPrevistos - fixosPagos);
   const precisaEstadoInicial = contas.some(
     (c) =>
       (c.tipo === "corrente" ||
@@ -487,125 +491,14 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             </section>
           ) : null}
 
-          <section className="fixed-expense-panel">
-            <div className="panel-head">
-              <div>
-                <p className="dashboard-kicker">Contas fixas</p>
-                <h3>Previsão do mês</h3>
-              </div>
-              <div className="fixed-expense-summary" aria-label="Resumo das contas fixas">
-                <span>Previsto <strong>{money(fixosPrevistos)}</strong></span>
-                <span>Pago <strong className="good">{money(fixosPagos)}</strong></span>
-                <span>Falta <strong className={fixosEmAberto > 0 ? "bad" : "good"}>{money(fixosEmAberto)}</strong></span>
-              </div>
-            </div>
-
-            <div className="fixed-expense-layout">
-              <div className="fixed-expense-list">
-                {gastosFixos.map((item) => {
-                  const pago = item.lancamento_mes_status === "liquidado";
-                  const previsto = item.lancamento_mes_status === "previsto";
-                  return (
-                    <div className="fixed-expense-row" key={item.id}>
-                      <div>
-                        <strong>{item.nome}</strong>
-                        <span>
-                          Dia {String(item.dia_vencimento).padStart(2, "0")} · {item.categoria_nome} · {item.conta_nome}
-                        </span>
-                      </div>
-                      <b>{money(item.valor_estimado)}</b>
-                      <em className={pago ? "paid" : previsto ? "planned" : ""}>
-                        {pago ? "Pago" : previsto ? "Previsto" : "Sem previsão"}
-                      </em>
-                    </div>
-                  );
-                })}
-                {gastosFixos.length === 0 ? (
-                  <p className="muted">Cadastre luz, internet, aluguel ou qualquer conta que se repete todo mês.</p>
-                ) : null}
-                {sugestoesFixos.length > 0 ? (
-                  <div className="fixed-suggestion-box">
-                    <p className="dashboard-kicker">Possíveis fixos</p>
-                    {sugestoesFixos.map((item) => (
-                      <form action={createGastoFixoAction} className="fixed-suggestion-row" key={`${item.descricao}-${item.conta_id}-${item.categoria_id}`}>
-                        <input name="gestaoId" type="hidden" value={gestaoAtiva.id} />
-                        <input name="anoMes" type="hidden" value={anoMesAtual} />
-                        <input name="nome" type="hidden" value={item.descricao} />
-                        <input name="valorEstimado" type="hidden" value={Number(item.valor_medio).toFixed(2)} />
-                        <input name="diaVencimento" type="hidden" value={Math.min(Math.max(Number(item.ultimo_dia || 1), 1), 31)} />
-                        <input name="contaId" type="hidden" value={item.conta_id} />
-                        <input name="categoriaId" type="hidden" value={item.categoria_id} />
-                        {item.meio ? <input name="meio" type="hidden" value={item.meio} /> : null}
-                        <div>
-                          <strong>{item.descricao}</strong>
-                          <span>
-                            {item.meses} meses · média {money(item.valor_medio)} · {item.categoria_nome}
-                          </span>
-                        </div>
-                        <button type="submit">Marcar fixo</button>
-                      </form>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-
-              <form action={createGastoFixoAction} className="fixed-expense-form">
-                <input name="gestaoId" type="hidden" value={gestaoAtiva.id} />
-                <input name="anoMes" type="hidden" value={anoMesAtual} />
-                <label>
-                  Nome
-                  <input name="nome" placeholder="Luz, internet, aluguel" required />
-                </label>
-                <label>
-                  Média
-                  <input min="0.01" name="valorEstimado" placeholder="180,00" required step="0.01" type="number" />
-                </label>
-                <label>
-                  Vence dia
-                  <input max="31" min="1" name="diaVencimento" required type="number" />
-                </label>
-                <label>
-                  Conta
-                  <select name="contaId" required>
-                    {contas.map((conta) => (
-                      <option key={conta.id} value={conta.id}>
-                        {conta.nome}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Categoria
-                  <select name="categoriaId" required>
-                    {categoriasDespesa.map((categoria) => (
-                      <option key={categoria.id} value={categoria.id}>
-                        {categoria.nome}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Meio
-                  <select name="meio">
-                    <option value="">Sem padrão</option>
-                    <option value="pix">Pix</option>
-                    <option value="debito">Débito</option>
-                    <option value="credito">Crédito</option>
-                    <option value="dinheiro">Dinheiro</option>
-                    <option value="boleto">Boleto</option>
-                    <option value="transferencia">Transferência</option>
-                    <option value="outro">Outro</option>
-                  </select>
-                </label>
-                <label className="wide">
-                  Observação
-                  <input name="descricao" placeholder="Opcional" />
-                </label>
-                <button disabled={!contas.length || !categoriasDespesa.length} type="submit">
-                  Cadastrar fixo
-                </button>
-              </form>
-            </div>
+          <section className="gastos-fixos-mes-entry" aria-label="Gastos fixos do mês">
+            <PlanoFixosMesModal
+              categoriasDespesa={categoriasDespesa.map((c) => ({ id: c.id, nome: c.nome }))}
+              contas={contas.map((c) => ({ id: c.id, nome: c.nome, tipo: c.tipo }))}
+              defaultMesDestino={anoMesAtual}
+              gestaoId={gestaoAtiva.id}
+              initialItens={planoFixosTemplateItens}
+            />
           </section>
 
           <section className="dashboard-split">

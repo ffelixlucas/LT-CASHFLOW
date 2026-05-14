@@ -124,3 +124,12 @@ export function addCalendarMonths(isoDate: string, deltaMonths: number): string 
 
   return `${out.getUTCFullYear()}-${String(out.getUTCMonth() + 1).padStart(2, "0")}-${String(out.getUTCDate()).padStart(2, "0")}`;
 }
+
+/** `anoMes` = `AAAA-MM`, `day` = dia do mês (1–31). Alinhado ao cálculo de competência de gastos fixos. */
+export function buildMonthCalendarDate(anoMes: string, day: number): string {
+  const [yearRaw, monthRaw] = anoMes.split("-").map(Number);
+  const year = yearRaw ?? new Date().getFullYear();
+  const month = monthRaw ?? new Date().getMonth() + 1;
+  const lastDay = new Date(year, month, 0).getDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
+}
