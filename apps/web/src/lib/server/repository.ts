@@ -285,12 +285,13 @@ const SQL_DATA_RECORTE_GESTAO = "COALESCE(fatura_competencia_data, competencia_d
  * Previsto criado automaticamente pelo cadastro de gasto fixo.
  * Não entra em totais de fluxo (mês/semana/categorias) para não somar em paralelo à despesa real
  * nem duplicar o que já aparece no painel Contas fixas.
+ * Usa COALESCE no JSON para evitar que `NULL = 'gasto_fixo'` exclua previstos legítimos (metadados vazio).
  */
 function sqlLancamentoNaoEhPrevistoSinteticoGastoFixo(alias: string): string {
   return `NOT (
     ${alias}.tipo = 'despesa'
     AND ${alias}.status = 'previsto'
-    AND JSON_UNQUOTE(JSON_EXTRACT(${alias}.metadados, '$.origem')) = 'gasto_fixo'
+    AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${alias}.metadados, '$.origem')), '') = 'gasto_fixo'
   )`;
 }
 
@@ -298,7 +299,7 @@ function sqlLancamentoNaoEhPrevistoSinteticoGastoFixoBare(): string {
   return `NOT (
     tipo = 'despesa'
     AND status = 'previsto'
-    AND JSON_UNQUOTE(JSON_EXTRACT(metadados, '$.origem')) = 'gasto_fixo'
+    AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(metadados, '$.origem')), '') = 'gasto_fixo'
   )`;
 }
 
@@ -3678,6 +3679,7 @@ export async function getSemanaMetricas(input: {
         AND l.status <> 'cancelado'
         AND l.competencia_data >= ?
         AND l.competencia_data <= ?
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixo("l")}
     `,
     [input.gestaoId, input.inicio, input.fim],
   );
@@ -3814,6 +3816,7 @@ export async function getSemanaResumoPorDia(input: {
         AND l.status <> 'cancelado'
         AND l.competencia_data >= ?
         AND l.competencia_data <= ?
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixo("l")}
       GROUP BY DATE_FORMAT(l.competencia_data, '%Y-%m-%d')
       ORDER BY data ASC
     `,
