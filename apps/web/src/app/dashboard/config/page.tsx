@@ -14,7 +14,8 @@ import {
   listGestaoMembros,
   listUserGestoes,
 } from "@/lib/server/repository";
-import { updateGestaoPercentualReservaAction } from "@/app/dashboard/actions";
+import { updateGestaoPercentualReservaAction, repairGastosFixoDuplicadosAction } from "@/app/dashboard/actions";
+import { canMutateGestao } from "@/lib/server/permissions";
 
 export const metadata: Metadata = {
   title: "Configurações",
@@ -73,6 +74,11 @@ export default async function DashboardConfigPage({ searchParams }: PageProps) {
   const contasPorLiquidez = agruparContasPorLiquidez(cashAccounts);
   const percentualReserva = Number(gestaoAtiva.percentual_reserva ?? 10);
   const gestaoQuery = `?gestao=${gestaoAtiva.id}`;
+  const reparoStatus = typeof params.status === "string" ? params.status : null;
+  const reparoL = typeof params.reparoL === "string" ? Number(params.reparoL) : null;
+  const reparoR = typeof params.reparoR === "string" ? Number(params.reparoR) : null;
+  const reparoS = typeof params.reparoS === "string" ? Number(params.reparoS) : null;
+  const podeReparar = canMutateGestao(roleUsuarioAtual);
 
   return (
     <main className="report-page">
@@ -169,6 +175,44 @@ export default async function DashboardConfigPage({ searchParams }: PageProps) {
           <p className="muted" style={{ marginTop: 16 }}>
             Nenhum membro encontrado nesta gestão.
           </p>
+        )}
+      </section>
+
+      <section className="card full" style={{ marginTop: 12 }}>
+        <h3>Contas fixas (reparo de dados)</h3>
+        {reparoStatus === "reparo-gastos-fixos" &&
+        reparoL != null &&
+        !Number.isNaN(reparoL) &&
+        reparoR != null &&
+        !Number.isNaN(reparoR) &&
+        reparoS != null &&
+        !Number.isNaN(reparoS) ? (
+          <p
+            className="rounded-xl border border-emerald-500/35 bg-emerald-500/10 px-4 py-3 text-sm text-foreground"
+            style={{ marginTop: 12 }}
+          >
+            Reparo concluído nesta gestão: <strong>{reparoL}</strong> lançamento(s) vinculado(s) ao fixo,{" "}
+            <strong>{reparoR}</strong> previsto(s) sintético(s) removido(s), <strong>{reparoS}</strong> ignorado(s)
+            (sem par no extrato no mês ou já corrigido).
+          </p>
+        ) : null}
+        <p className="muted" style={{ marginTop: 12 }}>
+          O sistema marca como <strong>gasto fixo</strong> o cadastro em <strong>Contas fixas</strong> (tabela{" "}
+          <code className="text-xs">gastos_fixos</code>) e o vínculo no mês via <code className="text-xs">metadados</code>{" "}
+          no lançamento. Se em algum momento ficou um <strong>previsto duplicado</strong> (automático) junto da compra
+          real, use o botão abaixo para <strong>esta gestão apenas</strong> — outras gestões e outros usuários não são
+          alterados. Instalação nova sem duplicatas: o resultado será 0-0-0.
+        </p>
+        {podeReparar ? (
+          <form action={repairGastosFixoDuplicadosAction} className="mt-4 flex flex-wrap items-center gap-3">
+            <input name="gestaoId" type="hidden" value={gestaoAtiva.id} />
+            <button className="tab active h-[46px] px-5" type="submit">
+              Reconciliar contas fixas com o extrato
+            </button>
+            <span className="text-xs text-muted">Proprietário, administrador ou editor.</span>
+          </form>
+        ) : (
+          <p className="muted mt-4 text-sm">Apenas quem pode editar a gestão pode executar o reparo.</p>
         )}
       </section>
 

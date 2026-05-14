@@ -1730,6 +1730,186 @@ export async function fetchGastosFixosDashboardSlice(input: {
   }
 }
 
+export type RepairGastosFixoPrevistosResult = {
+  /** Lançamentos reais que receberam vínculo ao gasto fixo. */
+  linked: number;
+  /** Previstos sintéticos (`origem=gasto_fixo`) removidos após o vínculo. */
+  removedSynthetic: number;
+  /** Sintéticos mantidos (sem despesa real correspondente no mês) ou ignorados. */
+  skipped: number;
+};
+
+function parseMetadadosLancamento(raw: unknown): Record<string, unknown> | null {
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "object" && !Buffer.isBuffer(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  const s = typeof raw === "string" ? raw : Buffer.isBuffer(raw) ? raw.toString("utf8") : "";
+  if (!s) return null;
+  try {
+    return JSON.parse(s) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Conserta histórico: previsto sintético do gasto fixo + despesa real no mesmo mês.
+ * Idempotente e por `gestaoId` (multi-tenant). Com BD vazio ou sem duplicatas, devolve zeros.
+ * Não altera gestões de outros usuários.
+ */
+export async function repairGestaoGastosFixoPrevistosDuplicados(
+  gestaoId: number,
+): Promise<RepairGastosFixoPrevistosResult> {
+  let linked = 0;
+  let removedSynthetic = 0;
+  let skipped = 0;
+
+  try {
+    const [synthRows] = await pool.query<
+      Array<RowDataPacket & { id: number; metadados: unknown; gestao_id: number }>
+    >(
+      `
+        SELECT l.id, l.metadados, l.gestao_id
+        FROM lancamentos l
+        WHERE l.gestao_id = ?
+          AND l.tipo = 'despesa'
+          AND l.status = 'previsto'
+          AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(l.metadados, '$.origem')), '') = 'gasto_fixo'
+        ORDER BY l.id ASC
+      `,
+      [gestaoId],
+    );
+
+    for (const row of synthRows) {
+      const meta = parseMetadadosLancamento(row.metadados);
+      const gfId = Number(meta?.gasto_fixo_id);
+      const anoMes = typeof meta?.ano_mes === "string" ? meta.ano_mes.trim() : "";
+      if (!Number.isFinite(gfId) || gfId <= 0 || !/^\d{4}-\d{2}$/.test(anoMes)) {
+        skipped += 1;
+        continue;
+      }
+
+      const [gfRows] = await pool.query<
+        Array<
+          RowDataPacket & {
+            id: number;
+            nome: string;
+            descricao: string | null;
+            conta_id: number;
+            categoria_id: number;
+          }
+        >
+      >(
+        `
+          SELECT id, nome, descricao, conta_id, categoria_id
+          FROM gastos_fixos
+          WHERE id = ?
+            AND gestao_id = ?
+            AND status = 'ativo'
+          LIMIT 1
+        `,
+        [gfId, gestaoId],
+      );
+
+      const gf = gfRows[0];
+      if (!gf) {
+        skipped += 1;
+        continue;
+      }
+
+      const nomeAlvo = String(gf.nome ?? "").trim();
+      const descAlvo = String(gf.descricao ?? "").trim();
+
+      const [candidates] = await pool.query<Array<RowDataPacket & { id: number }>>(
+        `
+          SELECT l.id
+          FROM lancamentos l
+          WHERE l.gestao_id = ?
+            AND l.conta_id = ?
+            AND l.categoria_id = ?
+            AND l.tipo = 'despesa'
+            AND l.status IN ('pendente', 'liquidado', 'previsto')
+            AND DATE_FORMAT(${SQL_L_DATA_RECORTE_GESTAO}, '%Y-%m') = ?
+            AND (
+              l.metadados IS NULL
+              OR COALESCE(JSON_UNQUOTE(JSON_EXTRACT(l.metadados, '$.gasto_fixo_id')), '') = ''
+            )
+            AND l.id <> ?
+            AND (
+              LOWER(TRIM(l.descricao)) = LOWER(?)
+              OR (NULLIF(?, '') IS NOT NULL AND LOWER(TRIM(l.descricao)) = LOWER(?))
+            )
+          ORDER BY ${SQL_L_DATA_RECORTE_GESTAO} DESC, l.id DESC
+          LIMIT 1
+        `,
+        [gestaoId, gf.conta_id, gf.categoria_id, anoMes, row.id, nomeAlvo, descAlvo, descAlvo],
+      );
+
+      const reuseId = candidates[0]?.id;
+      if (!reuseId) {
+        skipped += 1;
+        continue;
+      }
+
+      const connection = await pool.getConnection();
+      try {
+        await connection.beginTransaction();
+        await connection.query(
+          `
+            UPDATE lancamentos
+            SET recorrente = 1,
+                metadados = ?
+            WHERE id = ?
+              AND gestao_id = ?
+          `,
+          [
+            JSON.stringify({
+              gasto_fixo_id: gfId,
+              ano_mes: anoMes,
+              origem: "gasto_fixo_vinculo",
+            }),
+            reuseId,
+            gestaoId,
+          ],
+        );
+        await connection.query(
+          `
+            DELETE lr
+            FROM lancamento_rateios lr
+            INNER JOIN lancamentos l ON l.id = lr.lancamento_id
+            WHERE l.gestao_id = ? AND l.id = ?
+          `,
+          [gestaoId, row.id],
+        );
+        const [del] = await connection.query<ResultSetHeader>(
+          `DELETE FROM lancamentos WHERE gestao_id = ? AND id = ?`,
+          [gestaoId, row.id],
+        );
+        await connection.commit();
+        if (del.affectedRows > 0) {
+          linked += 1;
+          removedSynthetic += 1;
+        } else {
+          skipped += 1;
+        }
+      } catch {
+        await connection.rollback();
+        skipped += 1;
+      } finally {
+        connection.release();
+      }
+    }
+  } catch (error) {
+    if (isErNoSuchTableFor(error, "gastos_fixos")) {
+      return { linked: 0, removedSynthetic: 0, skipped: 0 };
+    }
+    throw error;
+  }
+
+  return { linked, removedSynthetic, skipped };
+}
+
 export async function createTransferencia(input: {
   gestaoId: number;
   contaOrigemId: number;

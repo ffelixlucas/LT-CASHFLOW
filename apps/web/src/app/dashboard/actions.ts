@@ -28,6 +28,7 @@ import {
   createParcelamentoNoCartao,
   createTransferencia,
   deleteLancamentos,
+  repairGestaoGastosFixoPrevistosDuplicados,
   updateCategoria,
   updateContaSaldoInicial,
   updateGestaoPercentualReserva,
@@ -581,4 +582,32 @@ export async function updateGestaoMemberRoleAction(formData: FormData) {
 
   revalidatePath("/dashboard");
   redirect(dashboardUrl(gestaoId, "membro-atualizado"));
+}
+
+export async function repairGastosFixoDuplicadosAction(formData: FormData) {
+  const user = await getAuthenticatedUser();
+  const gestaoId = Number(formData.get("gestaoId"));
+
+  if (!gestaoId) {
+    redirect("/dashboard?status=gestao-invalida");
+  }
+
+  if (!(await userCanMutateGestao(user.id, gestaoId))) {
+    redirect(`/dashboard/config?gestao=${gestaoId}&status=acesso-negado`);
+  }
+
+  const result = await repairGestaoGastosFixoPrevistosDuplicados(gestaoId);
+
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/config");
+  revalidatePath("/dashboard/semana");
+  revalidatePath("/dashboard/meses");
+
+  const q = new URLSearchParams();
+  q.set("gestao", String(gestaoId));
+  q.set("status", "reparo-gastos-fixos");
+  q.set("reparoL", String(result.linked));
+  q.set("reparoR", String(result.removedSynthetic));
+  q.set("reparoS", String(result.skipped));
+  redirect(`/dashboard/config?${q.toString()}`);
 }
