@@ -14,6 +14,7 @@ tmp/
 .env
 .env.local
 .env.*.local
+apps/web/.env.railway
 
 # OS / logs
 .DS_Store

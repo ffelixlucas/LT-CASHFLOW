@@ -71,6 +71,20 @@ function stateUrl(gestaoId?: number, status?: string) {
   return query ? `/dashboard/estado-inicial?${query}` : "/dashboard/estado-inicial";
 }
 
+export type LancamentoInlineResult =
+  | { ok: true }
+  | { ok: false; error: string };
+
+function isInlineLancamentoMutation(formData: FormData) {
+  return formData.get("inline") === "1";
+}
+
+function revalidateLancamentoPaths() {
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/meses");
+  revalidatePath("/dashboard/cartao");
+}
+
 function configUrl(gestaoId?: number, status?: string) {
   const search = new URLSearchParams();
 
@@ -519,7 +533,10 @@ export async function createTransferenciaAction(formData: FormData) {
   redirect(dashboardUrl(gestaoId, "transferencia-criada"));
 }
 
-export async function updateLancamentoAction(formData: FormData) {
+export async function updateLancamentoAction(
+  formData: FormData,
+): Promise<LancamentoInlineResult | void> {
+  const inline = isInlineLancamentoMutation(formData);
   const user = await getAuthenticatedUser();
   const gestaoId = Number(formData.get("gestaoId"));
   const competenciaData = normalizeDateInput(formData.get("competenciaData"));
@@ -528,6 +545,9 @@ export async function updateLancamentoAction(formData: FormData) {
   const vencimentoData = normalizeDateInput(formData.get("vencimentoData"));
 
   if (!(await userCanMutateGestao(user.id, gestaoId))) {
+    if (inline) {
+      return { ok: false, error: "Voce nao tem permissao para alterar esta gestao." };
+    }
     redirect("/dashboard?status=acesso-negado");
   }
 
@@ -558,6 +578,9 @@ export async function updateLancamentoAction(formData: FormData) {
   });
 
   if (!parsed.success) {
+    if (inline) {
+      return { ok: false, error: "Dados invalidos. Revise os campos e tente novamente." };
+    }
     redirect(dashboardUrl(gestaoId, "lancamento-invalido"));
   }
 
@@ -580,25 +603,38 @@ export async function updateLancamentoAction(formData: FormData) {
   });
 
   if (!updated) {
+    if (inline) {
+      return { ok: false, error: "Nao foi possivel atualizar este lancamento." };
+    }
     redirect(dashboardUrl(gestaoId, "lancamento-invalido"));
   }
 
-  revalidatePath("/dashboard");
-  revalidatePath("/dashboard/meses");
-  revalidatePath("/dashboard/cartao");
+  revalidateLancamentoPaths();
+  if (inline) {
+    return { ok: true };
+  }
   redirect(dashboardUrl(gestaoId, "lancamento-atualizado"));
 }
 
-export async function deleteLancamentoAction(formData: FormData) {
+export async function deleteLancamentoAction(
+  formData: FormData,
+): Promise<LancamentoInlineResult | void> {
+  const inline = isInlineLancamentoMutation(formData);
   const user = await getAuthenticatedUser();
   const gestaoId = Number(formData.get("gestaoId"));
   const lancamentoId = Number(formData.get("lancamentoId"));
 
   if (!gestaoId || !lancamentoId) {
+    if (inline) {
+      return { ok: false, error: "Lancamento invalido." };
+    }
     redirect("/dashboard?status=lancamento-invalido");
   }
 
   if (!(await userCanMutateGestao(user.id, gestaoId))) {
+    if (inline) {
+      return { ok: false, error: "Voce nao tem permissao para excluir nesta gestao." };
+    }
     redirect("/dashboard?status=acesso-negado");
   }
 
@@ -607,9 +643,10 @@ export async function deleteLancamentoAction(formData: FormData) {
     lancamentoIds: [lancamentoId],
   });
 
-  revalidatePath("/dashboard");
-  revalidatePath("/dashboard/meses");
-  revalidatePath("/dashboard/cartao");
+  revalidateLancamentoPaths();
+  if (inline) {
+    return { ok: true };
+  }
   redirect(dashboardUrl(gestaoId, "lancamento-excluido"));
 }
 

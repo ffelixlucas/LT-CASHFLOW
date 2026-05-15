@@ -49,6 +49,35 @@ function normalizeText(value: string) {
     .toLowerCase();
 }
 
+function cleanLancamentoDescricao(value: string) {
+  const cleaned = value
+    .replace(
+      /^\s*(?:compra|pagamento|paguei)\s+(?:no|na|com)?\s*(?:d[eé]bito|debito|cr[eé]dito|credito|pix|cart[aã]o)\s*[-:–—]?\s*/i,
+      "",
+    )
+    .replace(/^\s*(?:d[eé]bito|debito|cr[eé]dito|credito|pix)\s*[-:–—]?\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleaned || value.trim();
+}
+
+function inferExpenseCategoryName(referenceText: string) {
+  if (/\b(transporte|transp|coletivo|onibus|bus|metro|uber|99|taxi)\b/.test(referenceText)) {
+    return "Transporte";
+  }
+
+  if (/\b(planta|moradia|casa|reforma|material de construcao|construcao)\b/.test(referenceText)) {
+    return "Moradia";
+  }
+
+  if (/\b(super\s*mercado|supermercado|mercado|feira|padaria|restaurante|ifood|conveniencia)\b/.test(referenceText)) {
+    return "Alimentacao";
+  }
+
+  return null;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
@@ -92,6 +121,7 @@ async function normalizeQuickAddSuggestion(gestaoId: number, suggestion: QuickAd
   const currentConta = contas.find((conta) => conta.id === suggestion.contaId);
   const currentCategoria = categorias.find((categoria) => categoria.id === suggestion.categoriaId);
   const next: QuickAddSuggestion = { ...suggestion };
+  next.descricao = cleanLancamentoDescricao(next.descricao);
 
   if (suggestion.tipo === "despesa" && suggestion.meio === "credito" && currentConta?.tipo !== "cartao_credito") {
     const wantsLucas = currentConta ? /\blucas\b/.test(normalizeText(currentConta.nome)) : false;
@@ -104,6 +134,32 @@ async function normalizeQuickAddSuggestion(gestaoId: number, suggestion: QuickAd
     }
   }
 
+  if (
+    suggestion.tipo === "despesa" &&
+    suggestion.meio !== "credito" &&
+    suggestion.meio !== "transferencia" &&
+    currentConta?.tipo === "cartao_credito"
+  ) {
+    const referenceText = normalizeText(next.descricao);
+    const wantsLucas = /\blucas\b/.test(referenceText) || /\blucas\b/.test(normalizeText(currentConta.nome));
+    const defaultConta =
+      contas.find(
+        (conta) =>
+          conta.tipo !== "cartao_credito" &&
+          (!wantsLucas || /\blucas\b/.test(normalizeText(conta.nome))) &&
+          (conta.tipo === "corrente" || conta.tipo === "carteira" || conta.tipo === "caixa" || conta.tipo === "outro"),
+      ) ??
+      contas.find(
+        (conta) =>
+          conta.tipo !== "cartao_credito" &&
+          (conta.tipo === "corrente" || conta.tipo === "carteira" || conta.tipo === "caixa" || conta.tipo === "outro"),
+      );
+
+    if (defaultConta) {
+      next.contaId = defaultConta.id;
+    }
+  }
+
   const categoryNatureInvalid =
     suggestion.tipo === "receita"
       ? currentCategoria?.natureza === "despesa"
@@ -111,26 +167,24 @@ async function normalizeQuickAddSuggestion(gestaoId: number, suggestion: QuickAd
         ? currentCategoria?.natureza === "receita"
         : false;
 
-  if (!currentCategoria || categoryNatureInvalid) {
+  {
     const referenceText = normalizeText(suggestion.descricao);
-    const desiredCategoryName =
-      suggestion.tipo === "receita"
-        ? "Renda"
-        : /\b(planta|moradia|casa|reforma|material de construcao|construcao)\b/.test(referenceText)
-          ? "Moradia"
-          : /\b(super\s*mercado|supermercado|mercado|feira|padaria|restaurante|ifood)\b/.test(referenceText)
-            ? "Alimentacao"
-            : "Outros";
-    const desired = categorias.find(
-      (categoria) =>
-        normalizeText(categoria.nome) === normalizeText(desiredCategoryName) &&
-        (categoria.natureza === suggestion.tipo || categoria.natureza === "ambos"),
-    );
+    const inferredCategoryName =
+      suggestion.tipo === "receita" ? "Renda" : inferExpenseCategoryName(referenceText);
+    const desired = inferredCategoryName
+      ? categorias.find(
+          (categoria) =>
+            normalizeText(categoria.nome) === normalizeText(inferredCategoryName) &&
+            (categoria.natureza === suggestion.tipo || categoria.natureza === "ambos"),
+        )
+      : undefined;
     const fallback = categorias.find(
       (categoria) => categoria.natureza === suggestion.tipo || categoria.natureza === "ambos",
     );
 
-    if (desired ?? fallback) {
+    if (desired && currentCategoria?.id !== desired.id) {
+      next.categoriaId = desired.id;
+    } else if ((!currentCategoria || categoryNatureInvalid) && (desired ?? fallback)) {
       next.categoriaId = (desired ?? fallback)?.id;
     }
   }

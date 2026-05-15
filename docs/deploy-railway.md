@@ -92,9 +92,54 @@ PORT=${PORT:-3000} node apps/web/node_modules/next/dist/bin/next start apps/web 
 - Por isso, o deploy correto e pelo monorepo atual, apontando para o serviço `web`, nao para a pasta `backend/`.
 - Depois do primeiro deploy, atualize `NEXTAUTH_URL` com o domínio real publicado pelo Railway.
 
+## Banco unico (dev + producao)
+
+O app Next (`apps/web`) le `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` e `DB_NAME` de `apps/web/.env.local`.
+
+**Producao (Railway):** essas variaveis vêm do servico MySQL ligado ao servico `web` no painel.
+
+**Desenvolvimento:** se `DB_HOST=localhost`, voce usa um MySQL **na maquina**, separado do Railway. Os dados ficam diferentes — e isso explica divergencia entre `localhost:3000` e o site em producao.
+
+Padrao recomendado: copiar as mesmas variaveis `DB_*` do MySQL do Railway para `apps/web/.env.local` (host publico TCP, nao o host interno `*.railway.internal`).
+
+Conferir o alvo atual:
+
+```bash
+pnpm db:check
+```
+
+Deve mostrar `railway: sim` e as mesmas contagens que voce espera em producao.
+
+### Migrar dados locais para o Railway
+
+Use quando o banco local tiver dados que ainda nao estao no Railway (faca backup do Railway antes).
+
+1. No painel Railway, exporte/backup do MySQL de producao (opcional mas recomendado).
+2. Com `apps/web/.env.local` ainda apontando para **localhost**, gere o dump:
+
+```bash
+source apps/web/.env.local
+mysqldump -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" \
+  --single-transaction --routines --triggers "$DB_NAME" > /tmp/lt_cashflow_local.sql
+```
+
+3. Troque `DB_*` em `.env.local` para as credenciais **publicas** do MySQL no Railway.
+4. Rode as migrations pendentes no Railway, se houver (`backend/database/migrations/`).
+5. Importe (ajuste usuario/host conforme o Railway):
+
+```bash
+source apps/web/.env.local
+mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" < /tmp/lt_cashflow_local.sql
+```
+
+6. `pnpm db:check` de novo e reinicie `pnpm dev`.
+
+**Atencao:** `NEXTAUTH_SECRET` pode ser diferente entre ambientes; isso afeta sessao, nao os lancamentos. `NEXTAUTH_URL` no local deve continuar `http://localhost:3000`.
+
 ## Validacao local antes de subir
 
 ```bash
+pnpm db:check
 pnpm lint
 pnpm typecheck
 pnpm build

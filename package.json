@@ -10,6 +10,10 @@
     "typecheck": "pnpm --filter web typecheck && pnpm --filter @ltcashflow/db typecheck && pnpm --filter @ltcashflow/validation typecheck && pnpm --filter @ltcashflow/finance-core typecheck",
     "db:generate": "pnpm --filter @ltcashflow/db db:generate",
     "db:migrate": "pnpm --filter @ltcashflow/db db:migrate",
+    "db:check": "node scripts/check-db-target.mjs",
+    "db:query-railway": "node scripts/railway-db-query.mjs",
+    "db:restore-railway": "bash scripts/restore-local-to-railway.sh",
+    "db:counts": "bash scripts/db-table-counts.sh",
     "docs:redesign-spec": "node scripts/generate-redesign-spec-docx.cjs"
   },
   "devDependencies": {

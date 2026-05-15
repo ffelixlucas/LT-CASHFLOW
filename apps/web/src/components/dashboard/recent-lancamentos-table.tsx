@@ -1,10 +1,24 @@
 "use client";
 
-import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
+import {
+  Fragment,
+  type FormEvent,
+  type MouseEvent,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import { useRouter } from "next/navigation";
 
 import { computeCashFlow } from "@ltcashflow/finance-core";
-import { deleteLancamentoAction, updateLancamentoAction } from "@/app/dashboard/actions";
+import {
+  deleteLancamentoAction,
+  type LancamentoInlineResult,
+  updateLancamentoAction,
+} from "@/app/dashboard/actions";
 import { DateInput } from "@/components/ui/date-input";
+import { preserveScrollPosition, restorePreservedScrollPosition } from "@/lib/client/scroll-preservation";
 import { formatDateForDisplay, formatTimeForDisplay, normalizeDateInput } from "@/lib/date";
 
 type ContaOption = {
@@ -519,6 +533,9 @@ export function RecentLancamentosTable({
   const [dateTo, setDateTo] = useState("");
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [page, setPage] = useState(1);
+  const [mutating, setMutating] = useState(false);
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const router = useRouter();
   const wrapperMarginClass = compact ? "mt-2" : "mt-4";
   const groupedListClass = compact ? "space-y-0.5" : "space-y-2.5";
   const mobileCardPaddingClass = compact ? "px-3 py-2.5" : "px-4 py-3.5";
@@ -536,6 +553,62 @@ export function RecentLancamentosTable({
     selectedLancamento && editTipoDraft?.id === selectedLancamento.id
       ? editTipoDraft.tipo
       : selectedLancamento?.tipo ?? "despesa";
+
+  useEffect(() => {
+    setMutationError(null);
+  }, [selectedLancamentoId]);
+
+  function refreshInPlace() {
+    preserveScrollPosition();
+    router.refresh();
+    setTimeout(restorePreservedScrollPosition, 120);
+    setTimeout(restorePreservedScrollPosition, 360);
+  }
+
+  async function runInlineLancamentoMutation(
+    formData: FormData,
+    action: (data: FormData) => Promise<LancamentoInlineResult | void>,
+  ) {
+    formData.set("inline", "1");
+    setMutationError(null);
+    setMutating(true);
+
+    try {
+      const result = await action(formData);
+      if (result?.ok) {
+        setSelectedLancamentoId(null);
+        refreshInPlace();
+        return;
+      }
+
+      setMutationError(result?.error ?? "Nao foi possivel concluir a operacao.");
+    } catch {
+      setMutationError("Nao foi possivel concluir a operacao.");
+    } finally {
+      setMutating(false);
+    }
+  }
+
+  async function handleUpdateSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await runInlineLancamentoMutation(new FormData(event.currentTarget), updateLancamentoAction);
+  }
+
+  async function handleDeleteClick(event: MouseEvent<HTMLButtonElement>) {
+    const confirmed = window.confirm(
+      "Tem certeza que deseja excluir este lancamento? Essa acao nao pode ser desfeita.",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const form = event.currentTarget.form;
+    if (!form) {
+      return;
+    }
+
+    await runInlineLancamentoMutation(new FormData(form), deleteLancamentoAction);
+  }
 
   useEffect(() => {
     if (!selectedLancamento) {
@@ -1406,7 +1479,13 @@ export function RecentLancamentosTable({
               </button>
             </div>
 
-            <form action={updateLancamentoAction} className="mt-6 grid gap-3 lg:grid-cols-2">
+            {mutationError ? (
+              <p className="mt-4 rounded-2xl border border-accent-strong/30 bg-accent-strong/10 px-4 py-3 text-sm text-accent-strong">
+                {mutationError}
+              </p>
+            ) : null}
+
+            <form className="mt-6 grid gap-3 lg:grid-cols-2" onSubmit={handleUpdateSubmit}>
               <input name="gestaoId" type="hidden" value={gestaoId} />
               <input name="lancamentoId" type="hidden" value={selectedLancamento.id} />
 
@@ -1559,33 +1638,27 @@ export function RecentLancamentosTable({
 
               <div className="flex flex-wrap justify-end gap-3 lg:col-span-2">
                 <button
-                  className="rounded-full border border-line bg-background px-5 py-3 text-sm font-semibold text-accent-strong"
-                  formAction={deleteLancamentoAction}
-                  formNoValidate
-                  onClick={(event) => {
-                    const confirmed = window.confirm(
-                      "Tem certeza que deseja excluir este lancamento? Essa acao nao pode ser desfeita.",
-                    );
-                    if (!confirmed) {
-                      event.preventDefault();
-                    }
-                  }}
-                  type="submit"
+                  className="rounded-full border border-line bg-background px-5 py-3 text-sm font-semibold text-accent-strong disabled:opacity-60"
+                  disabled={mutating}
+                  onClick={handleDeleteClick}
+                  type="button"
                 >
                   Excluir
                 </button>
                 <button
-                  className="rounded-full border border-line px-5 py-3 text-sm font-semibold text-foreground"
+                  className="rounded-full border border-line px-5 py-3 text-sm font-semibold text-foreground disabled:opacity-60"
+                  disabled={mutating}
                   onClick={() => setSelectedLancamentoId(null)}
                   type="button"
                 >
                   Cancelar
                 </button>
                 <button
-                  className="rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white"
+                  className="rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                  disabled={mutating}
                   type="submit"
                 >
-                  Salvar alteracoes
+                  {mutating ? "Salvando..." : "Salvar alteracoes"}
                 </button>
               </div>
             </form>

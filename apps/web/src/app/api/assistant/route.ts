@@ -505,6 +505,35 @@ function normalizeText(value: string) {
     .toLowerCase();
 }
 
+function cleanLancamentoDescricao(value: string) {
+  const cleaned = value
+    .replace(
+      /^\s*(?:compra|pagamento|paguei)\s+(?:no|na|com)?\s*(?:d[eé]bito|debito|cr[eé]dito|credito|pix|cart[aã]o)\s*[-:–—]?\s*/i,
+      "",
+    )
+    .replace(/^\s*(?:d[eé]bito|debito|cr[eé]dito|credito|pix)\s*[-:–—]?\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleaned || value.trim();
+}
+
+function inferExpenseCategoryName(referenceText: string) {
+  if (/\b(transporte|transp|coletivo|onibus|bus|metro|uber|99|taxi)\b/.test(referenceText)) {
+    return "Transporte";
+  }
+
+  if (/\b(planta|moradia|casa|reforma|material de construcao|construcao)\b/.test(referenceText)) {
+    return "Moradia";
+  }
+
+  if (/\b(super\s*mercado|supermercado|mercado|feira|padaria|restaurante|ifood|conveniencia)\b/.test(referenceText)) {
+    return "Alimentacao";
+  }
+
+  return null;
+}
+
 function extractTimeFromText(value: string) {
   const match = value.match(/\b(?:as|às)?\s*([01]?\d|2[0-3])[:h]([0-5]\d)\b/i);
 
@@ -626,6 +655,32 @@ async function normalizeCreateLancamentoArgs(
     }
   }
 
+  if (
+    tipo === "despesa" &&
+    meio &&
+    meio !== "credito" &&
+    meio !== "transferencia" &&
+    currentConta?.tipo === "cartao_credito"
+  ) {
+    const wantsLucas = /\blucas\b/.test(referenceText) || /\blucas\b/.test(normalizeText(currentConta.nome));
+    const defaultConta =
+      contas.find(
+        (conta) =>
+          conta.tipo !== "cartao_credito" &&
+          (!wantsLucas || /\blucas\b/.test(normalizeText(conta.nome))) &&
+          (conta.tipo === "corrente" || conta.tipo === "carteira" || conta.tipo === "caixa" || conta.tipo === "outro"),
+      ) ??
+      contas.find(
+        (conta) =>
+          conta.tipo !== "cartao_credito" &&
+          (conta.tipo === "corrente" || conta.tipo === "carteira" || conta.tipo === "caixa" || conta.tipo === "outro"),
+      );
+
+    if (defaultConta) {
+      next.contaId = defaultConta.id;
+    }
+  }
+
   if (!currentConta && (tipo === "receita" || tipo === "despesa")) {
     const wantsLucas = /\blucas\b/.test(referenceText);
     const defaultConta =
@@ -653,23 +708,20 @@ async function normalizeCreateLancamentoArgs(
         ? currentCategoria?.natureza === "receita"
         : false;
 
-  if (tipo && (!currentCategoria || categoryNatureInvalid)) {
-    const desiredCategoryName =
-      tipo === "receita"
-        ? "Renda"
-        : /\b(planta|moradia|casa|reforma|material de construcao|construcao)\b/.test(referenceText)
-          ? "Moradia"
-          : /\b(super\s*mercado|supermercado|mercado|feira|padaria|restaurante|ifood)\b/.test(referenceText)
-            ? "Alimentacao"
-            : "Outros";
-    const desired = categorias.find(
-      (categoria) =>
-        normalizeText(categoria.nome) === normalizeText(desiredCategoryName) &&
-        (categoria.natureza === tipo || categoria.natureza === "ambos"),
-    );
+  if (tipo) {
+    const inferredCategoryName = tipo === "receita" ? "Renda" : inferExpenseCategoryName(referenceText);
+    const desired = inferredCategoryName
+      ? categorias.find(
+          (categoria) =>
+            normalizeText(categoria.nome) === normalizeText(inferredCategoryName) &&
+            (categoria.natureza === tipo || categoria.natureza === "ambos"),
+        )
+      : undefined;
     const fallback = categorias.find((categoria) => categoria.natureza === tipo || categoria.natureza === "ambos");
 
-    if (desired ?? fallback) {
+    if (desired && currentCategoria?.id !== desired.id) {
+      next.categoriaId = desired.id;
+    } else if ((!currentCategoria || categoryNatureInvalid) && (desired ?? fallback)) {
       next.categoriaId = (desired ?? fallback)?.id;
     }
   }
@@ -776,7 +828,7 @@ async function executeTool(
         const confirmar = Boolean(args.confirmar) && isExplicitMutationConfirmation(userPrompt);
         const hoje = new Date().toISOString().slice(0, 10);
 
-        const descricao = typeof args.descricao === "string" ? args.descricao : "";
+        const descricao = cleanLancamentoDescricao(typeof args.descricao === "string" ? args.descricao : "");
         const valor = typeof args.valor === "number" ? args.valor : Number(args.valor);
         const tipo = args.tipo === "receita" || args.tipo === "despesa" ? args.tipo : null;
         const contaId = typeof args.contaId === "number" ? args.contaId : NaN;
