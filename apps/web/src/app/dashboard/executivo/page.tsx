@@ -286,7 +286,7 @@ export default async function DashboardExecutivoPage({ searchParams }: PageProps
   return (
     <DashboardPageShell className="executive-page executive-decision-page">
       <DashboardPageHeader
-        active={null}
+        active="executivo"
         gestaoId={gestaoAtiva.id}
         kicker="Central executiva"
         subtitle={`${gestaoAtiva.nome} · ${periodo.label}`}

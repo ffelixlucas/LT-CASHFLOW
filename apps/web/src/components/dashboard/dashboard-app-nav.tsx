@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-export type DashboardNavKey = "inicio" | "semana" | "meses" | "cartao" | "reservas";
+export type DashboardNavKey = "inicio" | "executivo" | "semana" | "meses" | "cartao" | "reservas";
 
 export function DashboardAppNav({
   gestaoId,
@@ -17,6 +17,9 @@ export function DashboardAppNav({
       <nav aria-label="Área logada" className="flex flex-wrap items-center gap-2">
         <Link className={cls("inicio")} href={`/dashboard${q}`}>
           Início
+        </Link>
+        <Link className={cls("executivo")} href={`/dashboard/executivo${q}`}>
+          Executivo
         </Link>
         <Link className={cls("semana")} href={`/dashboard/semana${q}`}>
           Semana
