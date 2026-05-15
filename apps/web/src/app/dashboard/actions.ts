@@ -331,29 +331,24 @@ export async function gerarPrevistosPlanoFixosMesAction(payload: unknown) {
     redirect("/dashboard?status=plano-fixos-invalido");
   }
 
-  const { gestaoId, anoMesDestino, itens } = parsed.data;
+  const { gestaoId, itens, anoMesDestino, competenciaData } = parsed.data;
   if (!(await userCanMutateGestao(user.id, gestaoId))) {
     redirect("/dashboard?status=acesso-negado");
   }
 
-  if (itens && itens.length > 0) {
-    try {
-      await upsertPlanoFixosTemplate({ gestaoId, userId: user.id, itens });
-    } catch (error) {
-      const code = typeof error === "object" && error !== null ? (error as { code?: string }).code : undefined;
-      if (code === "PLANO_FIXOS_TEMPLATE_TABLE") {
-        redirect(dashboardUrl(gestaoId, "plano-fixos-migration"));
-      }
-      throw error;
-    }
-  }
-
-  const planoAtual = await getPlanoFixosTemplateItens(gestaoId);
-  if (planoAtual.length === 0) {
+  const itensParaLancar = itens ?? (await getPlanoFixosTemplateItens(gestaoId));
+  if (itensParaLancar.length === 0) {
     redirect(dashboardUrl(gestaoId, "plano-fixos-vazio"));
   }
 
-  await syncLancamentosPrevistosFromPlanoFixosMes({ gestaoId, userId: user.id, anoMes: anoMesDestino });
+  const dataLancamento = competenciaData ?? `${anoMesDestino}-01`;
+  await syncLancamentosPrevistosFromPlanoFixosMes({
+    gestaoId,
+    userId: user.id,
+    anoMes: dataLancamento.slice(0, 7),
+    competenciaData: dataLancamento,
+    itens: itensParaLancar,
+  });
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/meses");
   redirect(dashboardUrl(gestaoId, "plano-fixos-gerados"));

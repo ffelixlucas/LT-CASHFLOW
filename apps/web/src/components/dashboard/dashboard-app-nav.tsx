@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-export type DashboardNavKey = "inicio" | "semana" | "meses" | "reservas";
+export type DashboardNavKey = "inicio" | "semana" | "meses" | "cartao" | "reservas";
 
 export function DashboardAppNav({
   gestaoId,
@@ -23,6 +23,9 @@ export function DashboardAppNav({
         </Link>
         <Link className={cls("meses")} href={`/dashboard/meses${q}`}>
           Meses
+        </Link>
+        <Link className={cls("cartao")} href={`/dashboard/cartao${q}`}>
+          Cartão
         </Link>
         <Link className={cls("reservas")} href={`/dashboard/reservas${q}`}>
           Reservas

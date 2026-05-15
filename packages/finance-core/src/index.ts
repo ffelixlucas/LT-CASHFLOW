@@ -172,6 +172,79 @@ export function computeCashFlow(movements: CashFlowInput[]): CashFlowResult {
   };
 }
 
+/**
+ * Primeiro dia do mês de vencimento da fatura para uma compra no cartão.
+ * Regra: dia < fechamento_dia → fatura mês+1; dia >= fechamento_dia → fatura mês+2.
+ */
+export function computeFaturaCompetenciaParaCompra(
+  competenciaData: string,
+  fechamentoDia: number,
+): string {
+  const [yearRaw, monthRaw, dayRaw] = competenciaData.split("-").map(Number);
+  const year = yearRaw ?? 1970;
+  const month = monthRaw ?? 1;
+  const day = dayRaw ?? 1;
+
+  let targetMonth = day >= fechamentoDia ? month + 2 : month + 1;
+  let targetYear = year;
+  while (targetMonth > 12) {
+    targetMonth -= 12;
+    targetYear += 1;
+  }
+
+  return `${targetYear}-${String(targetMonth).padStart(2, "0")}-01`;
+}
+
+/** Normaliza qualquer data para a chave YYYY-MM-01 da fatura. */
+export function normalizeFaturaMesKey(dateIso: string): string {
+  return `${dateIso.slice(0, 7)}-01`;
+}
+
+/** Fatura em aberto na data de referência (compras ainda acumulando). */
+export function resolveFaturaCompetenciaAberta(referenceDate: string, fechamentoDia: number): string {
+  return computeFaturaCompetenciaParaCompra(referenceDate, fechamentoDia);
+}
+
+/**
+ * Mês da fatura que um pagamento na corrente quita.
+ * Se `fatura_competencia_data` existe, ela representa a fatura alvo e é normalizada
+ * para YYYY-MM-01. Sem fatura alvo explícita, cai no mês do pagamento.
+ */
+export function inferFaturaMesKeyPagamento(
+  competenciaData: string,
+  faturaCompetenciaData?: string | null,
+): string {
+  if (faturaCompetenciaData) {
+    return normalizeFaturaMesKey(faturaCompetenciaData);
+  }
+
+  return normalizeFaturaMesKey(competenciaData);
+}
+
+export type FaturaCartaoSaldoInput = {
+  comprasFatura: number;
+  pagamentosCorrente: number;
+  creditosNoCartao?: number;
+};
+
+export type FaturaCartaoSaldoResult = {
+  saldoFatura: number;
+  pagamentosConfiaveis: boolean;
+};
+
+/** Saldo em aberto da fatura = compras − pagamentos na corrente − créditos no cartão. */
+export function computeSaldoFaturaCartao(input: FaturaCartaoSaldoInput): FaturaCartaoSaldoResult {
+  const compras = toPositive(input.comprasFatura);
+  const pagamentos = toPositive(input.pagamentosCorrente);
+  const creditos = toPositive(input.creditosNoCartao ?? 0);
+  const saldo = Math.max(0, round2(compras - pagamentos - creditos));
+
+  return {
+    saldoFatura: saldo,
+    pagamentosConfiaveis: true,
+  };
+}
+
 function cycleStart(dateIso: string, fechamentoDia: number) {
   const [yearRaw, monthRaw, dayRaw] = dateIso.split("-").map(Number);
   const year = yearRaw ?? 1970;

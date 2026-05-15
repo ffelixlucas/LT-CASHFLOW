@@ -2,30 +2,32 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { SignOutButton } from "@/components/auth/sign-out-button";
-import { DashboardAppNav } from "@/components/dashboard/dashboard-app-nav";
-import { RecentLancamentosTable } from "@/components/dashboard/recent-lancamentos-table";
+import { normalizeFaturaMesKey, resolveFaturaCompetenciaAberta } from "@ltcashflow/finance-core";
+
+import { FaturaMesSelectForm } from "@/app/dashboard/cartao/fatura-mes-select-form";
+import { DashboardPageHeader } from "@/components/dashboard/dashboard-page-header";
+import { DashboardPageShell } from "@/components/dashboard/dashboard-page-shell";
+import { DashboardStack } from "@/components/dashboard/dashboard-stack";
 import { requireUser } from "@/lib/server/auth";
+import { timeServerAsync } from "@/lib/server/dashboard-server-timing";
 import {
-  getPagamentosFaturaParaCiclo,
-  listCategorias,
+  countMovimentosFaturaCartaoConta,
+  getResumoFaturaCartaoConta,
   listContas,
-  listCreditCardStatementData,
-  listLancamentosForContaRange,
+  listFaturaMesKeysParaCartaoConta,
+  listMovimentosFaturaCartaoConta,
   listUserGestoes,
+  type MovimentoFaturaCartao,
 } from "@/lib/server/repository";
 
 export const metadata: Metadata = {
-  title: "Cartoes",
+  title: "Fatura do cartão",
   robots: { index: false, follow: false },
 };
 
 type CartaoPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
-
-type PeriodKey = "week" | "month" | "year";
-type CardLancamento = Awaited<ReturnType<typeof listLancamentosForContaRange>>[number];
 
 function money(value: string | number | null | undefined) {
   const amount = Number(value ?? 0);
@@ -35,139 +37,82 @@ function money(value: string | number | null | undefined) {
   }).format(amount);
 }
 
-function normalizePeriod(): PeriodKey {
-  return "month";
+function parseFaturaQuery(raw: string | string[] | undefined): string | null {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (!v?.trim()) {
+    return null;
+  }
+
+  const t = v.trim();
+  if (/^\d{4}-\d{2}$/.test(t)) {
+    return normalizeFaturaMesKey(`${t}-01`);
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) {
+    return normalizeFaturaMesKey(t);
+  }
+
+  return null;
 }
 
-function formatYearDay(dateIso: string) {
+function parsePositiveInt(raw: string | string[] | undefined, fallback = 1) {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return fallback;
+  }
+
+  return Math.floor(parsed);
+}
+
+function formatListaDia(isoDay: string) {
+  const withNoonUtc = `${isoDay}T12:00:00Z`;
   return new Intl.DateTimeFormat("pt-BR", {
+    weekday: "long",
     day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    timeZone: "America/Sao_Paulo",
-  }).format(new Date(`${dateIso}T12:00:00`));
+    month: "long",
+    timeZone: "UTC",
+  }).format(new Date(withNoonUtc));
 }
 
-function formatRange(from: string, to: string) {
-  return `${formatYearDay(from)} a ${formatYearDay(to)}`;
+function agruparMovPorData(movs: MovimentoFaturaCartao[]): [string, MovimentoFaturaCartao[]][] {
+  const map = new Map<string, MovimentoFaturaCartao[]>();
+  for (const m of movs) {
+    const arr = map.get(m.competencia_data) ?? [];
+    arr.push(m);
+    map.set(m.competencia_data, arr);
+  }
+  return [...map.entries()]
+    .map(([dia, lista]) => [
+      dia,
+      [...lista].sort((a, b) => {
+        const horaDiff = (b.competencia_hora ?? "00:00").localeCompare(a.competencia_hora ?? "00:00");
+        return horaDiff || b.id - a.id;
+      }),
+    ] as [string, MovimentoFaturaCartao[]])
+    .sort(([a], [b]) => b.localeCompare(a));
 }
 
-function periodBounds(period: PeriodKey, base = new Date()) {
+function montarHrefCartao(input: {
+  gestaoId: number;
+  contaId: number;
+  fatura?: string;
+  pagina?: number;
+}) {
+  const qs = new URLSearchParams({
+    gestao: String(input.gestaoId),
+    conta: String(input.contaId),
+  });
 
-  if (period === "month") {
-    const start = new Date(base.getFullYear(), base.getMonth(), 1);
-    const end = new Date(base.getFullYear(), base.getMonth() + 1, 0);
-    return {
-      from: start.toISOString().slice(0, 10),
-      to: end.toISOString().slice(0, 10),
-      label: "Ciclo de referência",
-      range: `${start.toLocaleDateString("pt-BR", { month: "long", year: "numeric" })}`,
-      mapped: formatRange(start.toISOString().slice(0, 10), end.toISOString().slice(0, 10)),
-    };
+  if (input.fatura) {
+    qs.set("fatura", input.fatura);
   }
 
-  if (period === "year") {
-    const start = new Date(base.getFullYear(), 0, 1);
-    const end = new Date(base.getFullYear(), 11, 31);
-    return {
-      from: start.toISOString().slice(0, 10),
-      to: end.toISOString().slice(0, 10),
-      label: "Ciclo de referência",
-      range: `${base.getFullYear()}`,
-      mapped: formatRange(start.toISOString().slice(0, 10), end.toISOString().slice(0, 10)),
-    };
+  if (input.pagina && input.pagina > 1) {
+    qs.set("pagina", String(input.pagina));
   }
 
-  const day = base.getDay();
-  const diffToMonday = day === 0 ? -6 : 1 - day;
-  const start = new Date(base);
-  start.setDate(base.getDate() + diffToMonday);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(start.getDate() + 6);
-  end.setHours(23, 59, 59, 999);
-
-  return {
-    from: start.toISOString().slice(0, 10),
-    to: end.toISOString().slice(0, 10),
-    label: "Ciclo de referência",
-    range: formatRange(start.toISOString().slice(0, 10), end.toISOString().slice(0, 10)),
-    mapped: `${new Intl.DateTimeFormat("pt-BR", {
-      weekday: "short",
-      day: "2-digit",
-      month: "2-digit",
-      timeZone: "America/Sao_Paulo",
-    })
-      .format(new Date(`${start.toISOString().slice(0, 10)}T12:00:00`))
-      .replace(/\.$/, "")} a ${new Intl.DateTimeFormat("pt-BR", {
-      weekday: "short",
-      day: "2-digit",
-      month: "2-digit",
-      timeZone: "America/Sao_Paulo",
-    })
-      .format(new Date(`${end.toISOString().slice(0, 10)}T12:00:00`))
-      .replace(/\.$/, "")}`,
-  };
-}
-
-function sum(values: Array<number | string | null | undefined>) {
-  return values.reduce<number>((acc, value) => acc + Number(value ?? 0), 0);
-}
-
-function compareLancamentosPorCompraDesc(a: CardLancamento, b: CardLancamento) {
-  const dataDiff = b.competencia_data.localeCompare(a.competencia_data);
-  if (dataDiff !== 0) return dataDiff;
-
-  const horaA = a.competencia_hora ?? "00:00";
-  const horaB = b.competencia_hora ?? "00:00";
-  const horaDiff = horaB.localeCompare(horaA);
-  if (horaDiff !== 0) return horaDiff;
-
-  return b.id - a.id;
-}
-
-function buildCardSummary(
-  rows: CardLancamento[],
-  cardId: number,
-  limiteCredito: number | null,
-  pagamentosCorrente: number,
-) {
-  const compras = sum(
-    rows
-      .filter((row) => row.conta_id === cardId && row.tipo === "despesa" && row.meio === "credito")
-      .map((row) => row.valor_total),
-  );
-
-  // Pagamentos vindos como transferência/receita com destino no cartão (modelo "ideal").
-  const pagamentosDirecionados = sum(
-    rows
-      .filter(
-        (row) =>
-          row.conta_destino_id === cardId &&
-          (row.tipo === "transferencia" || row.tipo === "receita"),
-      )
-      .map((row) => row.valor_total),
-  );
-
-  // Soma com pagamentos vindos como `despesa` na corrente com descrição "Fatura Cart…"
-  // (modelo do fechamento semanal). Esses pagamentos são contabilizados via query
-  // separada na janela do ciclo da fatura corrente.
-  const pagamentos = Number(pagamentosDirecionados) + Number(pagamentosCorrente ?? 0);
-
-  // Saldo em aberto do ciclo = compras do ciclo − pagamentos atribuídos ao ciclo.
-  // O `saldo_inicial` da conta cartão representa apenas a "foto" do cartão na abertura
-  // do app — para um cartão que vem sendo pago periodicamente, esse valor já está
-  // coberto pelos pagamentos históricos e somá-lo aqui inflaria o utilizado.
-  const saldoEmAberto = Math.max(0, Number(compras) - Number(pagamentos));
-  const limiteDisponivel =
-    limiteCredito !== null ? Math.max(0, Number(limiteCredito) - saldoEmAberto) : null;
-
-  return {
-    compras,
-    pagamentos,
-    saldoEmAberto,
-    limiteDisponivel,
-  };
+  return `/dashboard/cartao?${qs.toString()}`;
 }
 
 export default async function DashboardCartaoPage({ searchParams }: CartaoPageProps) {
@@ -184,10 +129,7 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
   const gestaoAtiva =
     gestoes.find((item) => item.id === requestedGestaoId) ?? gestoes[0] ?? null;
 
-  const selectedPeriod = normalizePeriod();
-
   const contas = gestaoAtiva ? await listContas(gestaoAtiva.id) : [];
-  const categorias = gestaoAtiva ? await listCategorias(gestaoAtiva.id) : [];
   const cartoes = contas.filter((conta) => conta.tipo === "cartao_credito");
 
   const requestedContaId =
@@ -195,225 +137,318 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
   const contaCartaoAtiva =
     cartoes.find((item) => item.id === requestedContaId) ?? cartoes[0] ?? null;
 
-  const cartoesComMovimentos = gestaoAtiva ? await listCreditCardStatementData(gestaoAtiva.id) : [];
-  const movimentosCartaoAtivo =
-    contaCartaoAtiva !== null
-      ? cartoesComMovimentos.find((item) => item.id === contaCartaoAtiva.id)?.movimentos ?? []
-      : [];
-  const referenceDate =
-    movimentosCartaoAtivo.length > 0
-      ? new Date(
-          `${[...movimentosCartaoAtivo]
-            .map((movement) => movement.fatura_competencia_data ?? movement.competencia_data)
-            .sort()
-            .at(-1)}T12:00:00`,
-        )
-      : new Date();
+  const hoje = new Date().toISOString().slice(0, 10);
 
-  const periodoAtual = periodBounds(selectedPeriod, referenceDate);
+  let faturaMesKeys: string[] = [];
+  let faturaAberta = "";
+  let faturaQuery: string | null = null;
 
-  const lancamentosPeriodo =
+  if (gestaoAtiva && contaCartaoAtiva) {
+    faturaAberta = resolveFaturaCompetenciaAberta(
+      hoje,
+      contaCartaoAtiva.fechamento_dia ?? 30,
+    );
+    faturaQuery = parseFaturaQuery(params.fatura);
+  }
+
+  const faturaSelecionada =
     gestaoAtiva && contaCartaoAtiva
-      ? await listLancamentosForContaRange({
-          gestaoId: gestaoAtiva.id,
-          contaId: contaCartaoAtiva.id,
-          dateFrom: periodoAtual.from,
-          dateTo: periodoAtual.to,
-          dateField: "fatura",
-        })
-      : [];
-  const lancamentosCartaoPeriodo = [...lancamentosPeriodo].sort(compareLancamentosPorCompraDesc);
+      ? (faturaQuery ?? faturaAberta)
+      : normalizeFaturaMesKey(`${hoje.slice(0, 7)}-01`);
 
-  // Pagamentos de fatura registrados como `despesa` na corrente — não aparecem em
-  // `lancamentosPeriodo` (que só traz movimentos do cartão), então precisamos
-  // somá-los à parte usando a janela do ciclo da fatura em referência.
-  const faturaReferenciaIso = periodoAtual.from;
-  const pagamentosFaturaCorrente =
-    gestaoAtiva && contaCartaoAtiva
-      ? await getPagamentosFaturaParaCiclo({
-          gestaoId: gestaoAtiva.id,
-          faturaCompetenciaData: faturaReferenciaIso,
-        })
-      : 0;
+  let resumoFatura = null;
+  let movimentos: MovimentoFaturaCartao[] = [];
+  let totalMovimentos = 0;
+  const movimentosPorPagina = 14;
+  const paginaMovimentos = parsePositiveInt(params.pagina);
+  const offsetMovimentos = (paginaMovimentos - 1) * movimentosPorPagina;
 
-  const resumoCartao = contaCartaoAtiva
-    ? buildCardSummary(
-        lancamentosCartaoPeriodo,
-        contaCartaoAtiva.id,
-        contaCartaoAtiva.limite_credito !== null ? Number(contaCartaoAtiva.limite_credito ?? 0) : null,
-        pagamentosFaturaCorrente,
-      )
-    : { compras: 0, pagamentos: 0, saldoEmAberto: 0, limiteDisponivel: null };
+  if (gestaoAtiva && contaCartaoAtiva) {
+    const [distinct, res, movs, totalMovs] = await timeServerAsync("dashboard/cartao/data", () =>
+      Promise.all([
+        listFaturaMesKeysParaCartaoConta({
+          gestaoId: gestaoAtiva.id,
+          contaCartaoId: contaCartaoAtiva.id,
+          maxMeses: 36,
+        }),
+        getResumoFaturaCartaoConta({
+          gestaoId: gestaoAtiva.id,
+          contaCartaoId: contaCartaoAtiva.id,
+          faturaCompetenciaData: faturaSelecionada,
+          aplicarCreditosNoSaldo: false,
+        }),
+        listMovimentosFaturaCartaoConta({
+          gestaoId: gestaoAtiva.id,
+          contaCartaoId: contaCartaoAtiva.id,
+          faturaCompetenciaData: faturaSelecionada,
+          limit: movimentosPorPagina,
+          offset: offsetMovimentos,
+        }),
+        countMovimentosFaturaCartaoConta({
+          gestaoId: gestaoAtiva.id,
+          contaCartaoId: contaCartaoAtiva.id,
+          faturaCompetenciaData: faturaSelecionada,
+        }),
+      ]),
+    );
+
+    const opcaoSet = new Set<string>([...distinct, faturaAberta, faturaQuery ?? faturaAberta]);
+    faturaMesKeys = [...opcaoSet].sort((a, b) => b.localeCompare(a));
+    resumoFatura = res;
+    movimentos = movs;
+    totalMovimentos = totalMovs;
+  }
+
+  const totalPaginasMovimentos = Math.max(1, Math.ceil(totalMovimentos / movimentosPorPagina));
+  const paginaMovimentosSegura = Math.min(paginaMovimentos, totalPaginasMovimentos);
+
+  if (gestaoAtiva && contaCartaoAtiva && paginaMovimentos > totalPaginasMovimentos && totalMovimentos > 0) {
+    redirect(
+      montarHrefCartao({
+        gestaoId: gestaoAtiva.id,
+        contaId: contaCartaoAtiva.id,
+        fatura: faturaSelecionada,
+        pagina: totalPaginasMovimentos,
+      }),
+    );
+  }
+
+  const idxFatura =
+    contaCartaoAtiva && faturaMesKeys.length > 0
+      ? faturaMesKeys.indexOf(faturaSelecionada)
+      : -1;
+  const prevFatura =
+    idxFatura >= 0 && idxFatura < faturaMesKeys.length - 1 ? faturaMesKeys[idxFatura + 1] : null;
+  const nextFatura = idxFatura > 0 ? faturaMesKeys[idxFatura - 1] : null;
+
+  const grupoMovimentos = agruparMovPorData(movimentos);
+
+  const rotuloMesFatura = new Intl.DateTimeFormat("pt-BR", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(`${faturaSelecionada}T12:00:00Z`));
+
+  const faturaOpcoesSelect = faturaMesKeys.map((mo) => {
+    const lbl = new Intl.DateTimeFormat("pt-BR", {
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    }).format(new Date(`${mo}T12:00:00Z`));
+    const mark = mo === faturaAberta ? " (atual)" : "";
+    return { valor: mo, rotulo: `${lbl}${mark}` };
+  });
+
+  const fechTxt =
+    contaCartaoAtiva?.fechamento_dia !== undefined && contaCartaoAtiva.fechamento_dia !== null
+      ? `Dia ${contaCartaoAtiva.fechamento_dia}`
+      : "—";
+  const vencTxt =
+    contaCartaoAtiva?.vencimento_dia !== undefined && contaCartaoAtiva.vencimento_dia !== null
+      ? `Dia ${contaCartaoAtiva.vencimento_dia}`
+      : "—";
 
   return (
-    <main className="min-h-screen bg-background px-3 py-3 sm:px-6 sm:py-6 lg:px-10 lg:py-10">
-      <div className="mx-auto max-w-6xl space-y-4">
-        <header className="rounded-[1.4rem] border border-line bg-surface p-4 sm:p-6">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[11px] tracking-[0.18em] text-muted uppercase">Cartão de crédito</p>
-              <h1 className="mt-2 font-heading text-2xl font-semibold leading-tight sm:text-3xl">
-                {gestaoAtiva ? gestaoAtiva.nome : "Gestão"}
-              </h1>
-              <p className="mt-1.5 text-sm text-muted">
-                Fatura do cartão em modo de conferência, com filtros iguais aos do dashboard.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {gestaoAtiva ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <DashboardAppNav active={null} gestaoId={gestaoAtiva.id} />
+    <DashboardPageShell>
+      {!gestaoAtiva ? (
+        <p className="muted">Nenhuma gestão disponível.</p>
+      ) : (
+        <>
+          <DashboardPageHeader
+            active="cartao"
+            gestaoId={gestaoAtiva.id}
+            kicker="Cartão de crédito"
+            subtitle={contaCartaoAtiva?.nome ?? "Nenhum cartão selecionado"}
+            title="Fatura"
+            below={
+              gestoes.length > 1 ? (
+                <div className="period-chips">
+                  {gestoes.map((gestao) => (
+                    <Link
+                      className={`period-chip ${gestaoAtiva.id === gestao.id ? "active" : ""}`}
+                      href={`/dashboard/cartao?gestao=${gestao.id}`}
+                      key={gestao.id}
+                    >
+                      {gestao.nome}
+                    </Link>
+                  ))}
                 </div>
-              ) : null}
-              <SignOutButton />
-            </div>
-          </div>
+              ) : null
+            }
+          />
 
-          {gestoes.length > 1 ? (
-            <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
-              {gestoes.map((gestao) => (
-                <Link
-                  className={`shrink-0 rounded-full px-4 py-2 text-sm ${
-                    gestaoAtiva?.id === gestao.id
-                      ? "bg-foreground text-white"
-                      : "border border-line bg-background text-foreground"
-                  }`}
-                  href={`/dashboard/cartao?gestao=${gestao.id}&period=${selectedPeriod}`}
-                  key={gestao.id}
-                >
-                  {gestao.nome}
-                </Link>
-              ))}
-            </div>
-          ) : null}
+          <DashboardStack>
+            {cartoes.length === 0 ? (
+              <section className="decision-box">
+                Nenhuma origem do tipo cartão cadastrada. Crie uma conta com tipo cartão de crédito em Origens.
+              </section>
+            ) : contaCartaoAtiva ? (
+              <>
+                {cartoes.length > 1 ? (
+                  <div className="period-chips">
+                    {cartoes.map((c) => (
+                      <Link
+                        key={c.id}
+                        href={montarHrefCartao({ gestaoId: gestaoAtiva.id, contaId: c.id })}
+                        className={`period-chip ${c.id === contaCartaoAtiva.id ? "active" : ""}`}
+                      >
+                        {c.nome}
+                      </Link>
+                    ))}
+                  </div>
+                ) : null}
 
-          <div className="mt-4 flex flex-wrap gap-2">
-            <span className="rounded-full bg-foreground px-4 py-2 text-sm font-medium text-white shadow-sm">
-              Ciclo mensal
-            </span>
-          </div>
+                <section className="decision-hero">
+                  <div className="decision-copy">
+                    <p className="dashboard-kicker">Fatura selecionada</p>
+                    <h2 className="capitalize">{rotuloMesFatura}</h2>
+                    <p>
+                      Fechamento: <strong>{fechTxt}</strong>. Vencimento: <strong>{vencTxt}</strong>.
+                    </p>
+                    <div className="decision-actions">
+                      {prevFatura ? (
+                        <Link
+                          className="decision-button"
+                          href={montarHrefCartao({
+                            gestaoId: gestaoAtiva.id,
+                            contaId: contaCartaoAtiva.id,
+                            fatura: prevFatura,
+                          })}
+                        >
+                          Fatura anterior
+                        </Link>
+                      ) : null}
+                      <FaturaMesSelectForm
+                        contaId={contaCartaoAtiva.id}
+                        gestaoId={gestaoAtiva.id}
+                        opcoes={faturaOpcoesSelect}
+                        valorAtual={faturaSelecionada}
+                      />
+                      {nextFatura ? (
+                        <Link
+                          className="decision-button"
+                          href={montarHrefCartao({
+                            gestaoId: gestaoAtiva.id,
+                            contaId: contaCartaoAtiva.id,
+                            fatura: nextFatura,
+                          })}
+                        >
+                          Próxima fatura
+                        </Link>
+                      ) : null}
+                    </div>
+                  </div>
 
-          <div className="mt-4">
-            <p className="text-sm text-muted">{periodoAtual.label}</p>
-            <p className="mt-1 text-base font-medium">
-              {periodoAtual.range}
-            </p>
-            <p className="mt-1 text-xs text-muted">Dias mapeados: {periodoAtual.mapped}</p>
-          </div>
-        </header>
+                  <div className="decision-ledger" aria-label="Resumo da fatura">
+                    <div>
+                      <span>Compras</span>
+                      <strong className="bad">{resumoFatura ? money(resumoFatura.comprasFatura) : "—"}</strong>
+                    </div>
+                    <div>
+                      <span>Pagamentos</span>
+                      <strong className="good">
+                        {resumoFatura && resumoFatura.pagamentosCorrente > 0
+                          ? money(resumoFatura.pagamentosCorrente)
+                          : "—"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Saldo em aberto</span>
+                      <strong>{resumoFatura ? money(resumoFatura.saldoFatura) : "—"}</strong>
+                    </div>
+                    <div>
+                      <span>Movimentos</span>
+                      <strong>{totalMovimentos}</strong>
+                    </div>
+                  </div>
+                </section>
 
-        {!gestaoAtiva ? (
-          <p className="text-sm text-muted">Nenhuma gestão disponível.</p>
-        ) : cartoes.length === 0 ? (
-          <section className="rounded-[1.2rem] border border-line bg-surface p-5 text-sm text-muted">
-            Nenhuma origem do tipo cartão cadastrada. Crie uma conta com tipo cartão de crédito em
-            Origens.
-          </section>
-        ) : contaCartaoAtiva ? (
-          <>
-          <section className="rounded-[1.4rem] border border-line bg-surface p-4 sm:p-5">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 className="font-heading text-xl font-semibold">Resumo do ciclo</h2>
-                <p className="mt-1 text-sm text-muted">
-                  {periodoAtual.range} · {periodoAtual.mapped}
-                </p>
-              </div>
-              <div className="rounded-full border border-line bg-background px-3 py-2 text-sm font-medium text-foreground">
-                {contaCartaoAtiva.nome}
-              </div>
-            </div>
+                <section className="analysis-panel">
+                  <div className="panel-head">
+                    <div>
+                      <p className="dashboard-kicker">Movimentações</p>
+                      <h3>Compras e pagamentos</h3>
+                    </div>
+                    <span className="muted capitalize">{rotuloMesFatura}</span>
+                  </div>
 
-            <div className="mt-4 grid gap-3 xl:grid-cols-[1.4fr_0.8fr_0.8fr]">
-              <div className="rounded-[1rem] border border-line bg-background px-4 py-4">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-muted">Gasto no ciclo</p>
-                <p className="mt-2 text-2xl font-semibold text-accent-strong">
-                  {money(resumoCartao.compras)}
-                </p>
-                <p className="mt-2 text-sm text-muted">Compras lançadas na fatura deste ciclo.</p>
-              </div>
+                  {movimentos.length === 0 ? (
+                    <p className="muted">Nenhum lançamento nesta fatura.</p>
+                  ) : (
+                    <>
+                      <div className="activity-list">
+                        {grupoMovimentos.map(([dia, lista]) => (
+                          <div className="card-statement-day" key={dia}>
+                            <p className="card-statement-date">{formatListaDia(dia)}</p>
+                            <div>
+                              {lista.map((m) => {
+                                const texto =
+                                  (m.descricao && m.descricao.trim()) ||
+                                  `${m.tipo === "compra" ? "Compra" : "Pagamento"} #${m.id}`;
+                                const extra = `${m.categoria_nome}${m.conta_nome ? ` · ${m.conta_nome}` : ""}`;
+                                const ehCompra = m.tipo === "compra";
 
-              <div className="rounded-[1rem] border border-line bg-background px-4 py-4">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-muted">Limite total</p>
-                <p className="mt-2 text-2xl font-semibold">
-                  {contaCartaoAtiva.limite_credito !== null ? money(contaCartaoAtiva.limite_credito) : "Nao informado"}
-                </p>
-                <p className="mt-2 text-sm text-muted">Limite total do cartão cadastrado.</p>
-              </div>
+                                return (
+                                  <div className="activity-row" key={`${m.tipo}-${m.id}`}>
+                                    <div>
+                                      <strong>{texto}</strong>
+                                      {extra.trim() !== "" ? <span>{extra}</span> : null}
+                                    </div>
+                                    <b className={ehCompra ? "bad" : "good"}>
+                                      {ehCompra ? "-" : "+"}
+                                      {money(m.valor_total)}
+                                    </b>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
 
-              <div className="rounded-[1rem] border border-line bg-background px-4 py-4">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-muted">Limite disponível</p>
-                <p className="mt-2 text-2xl font-semibold">
-                  {resumoCartao.limiteDisponivel !== null
-                    ? money(resumoCartao.limiteDisponivel)
-                    : "Nao informado"}
-                </p>
-                <p className="mt-2 text-sm text-muted">Saldo livre para novas compras.</p>
-              </div>
-            </div>
-
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-[1rem] border border-line bg-background px-4 py-3">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-muted">Fechamento</p>
-                <p className="mt-2 text-lg font-semibold">
-                  {contaCartaoAtiva.fechamento_dia !== null ? `Dia ${contaCartaoAtiva.fechamento_dia}` : "Nao informado"}
-                </p>
-              </div>
-              <div className="rounded-[1rem] border border-line bg-background px-4 py-3">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-muted">Vencimento</p>
-                <p className="mt-2 text-lg font-semibold">
-                  {contaCartaoAtiva.vencimento_dia !== null ? `Dia ${contaCartaoAtiva.vencimento_dia}` : "Nao informado"}
-                </p>
-              </div>
-              <div className="rounded-[1rem] border border-line bg-background px-4 py-3">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-muted">Pago neste ciclo</p>
-                <p className="mt-2 text-lg font-semibold">
-                  {resumoCartao.pagamentos > 0 ? money(resumoCartao.pagamentos) : "—"}
-                </p>
-              </div>
-              <div className="rounded-[1rem] border border-line bg-background px-4 py-3">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-muted">Saldo em aberto</p>
-                <p className="mt-2 text-lg font-semibold">
-                  {resumoCartao.saldoEmAberto > 0 ? money(resumoCartao.saldoEmAberto) : "Fechado"}
-                </p>
-              </div>
-            </div>
-
-            {contaCartaoAtiva.limite_credito && Number(contaCartaoAtiva.limite_credito) > 0 ? (
-              <div className="mt-4">
-                <div className="h-2 overflow-hidden rounded-full bg-muted/20">
-                  <div
-                    className="h-full rounded-full bg-accent-strong"
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        (resumoCartao.compras / Number(contaCartaoAtiva.limite_credito)) * 100,
-                      ).toFixed(0)}%`,
-                    }}
-                  />
-                </div>
-              </div>
-            ) : null}
-          </section>
-
-          <section className="space-y-4">
-            <h2 className="font-heading text-xl font-semibold">Movimentações do cartão</h2>
-            <RecentLancamentosTable
-              categorias={categorias}
-              contas={contas}
-              gestaoId={gestaoAtiva.id}
-              lancamentos={lancamentosCartaoPeriodo}
-              compact
-              showSummaryCards={false}
-              showFiltersSummary={false}
-              showGroupBalance={false}
-            />
-            </section>
-          </>
-        ) : (
-          <p className="text-sm text-muted">Nenhum cartão de crédito cadastrado nesta gestão.</p>
-        )}
-      </div>
-    </main>
+                      <div className="dashboard-pagination">
+                        <span>
+                          Página {paginaMovimentosSegura} de {totalPaginasMovimentos}
+                        </span>
+                        <div className="period-chips">
+                          {paginaMovimentosSegura > 1 ? (
+                            <Link
+                              className="period-chip"
+                              href={montarHrefCartao({
+                                gestaoId: gestaoAtiva.id,
+                                contaId: contaCartaoAtiva.id,
+                                fatura: faturaSelecionada,
+                                pagina: paginaMovimentosSegura - 1,
+                              })}
+                            >
+                              ← Anterior
+                            </Link>
+                          ) : null}
+                          {paginaMovimentosSegura < totalPaginasMovimentos ? (
+                            <Link
+                              className="period-chip"
+                              href={montarHrefCartao({
+                                gestaoId: gestaoAtiva.id,
+                                contaId: contaCartaoAtiva.id,
+                                fatura: faturaSelecionada,
+                                pagina: paginaMovimentosSegura + 1,
+                              })}
+                            >
+                              Próxima →
+                            </Link>
+                          ) : null}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </section>
+              </>
+            ) : (
+              <p className="muted">Nenhum cartão de crédito cadastrado nesta gestão.</p>
+            )}
+          </DashboardStack>
+        </>
+      )}
+    </DashboardPageShell>
   );
 }

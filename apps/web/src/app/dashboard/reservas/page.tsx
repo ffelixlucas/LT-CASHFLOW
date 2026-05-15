@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { SignOutButton } from "@/components/auth/sign-out-button";
-import { DashboardAppNav } from "@/components/dashboard/dashboard-app-nav";
+import { DashboardPageHeader } from "@/components/dashboard/dashboard-page-header";
+import { DashboardPageShell } from "@/components/dashboard/dashboard-page-shell";
+import { DashboardStack } from "@/components/dashboard/dashboard-stack";
 import { requireUser } from "@/lib/server/auth";
+import { timeServerAsync } from "@/lib/server/dashboard-server-timing";
 import {
   getReservasResumoPeriodo,
   listCashAccountBreakdown,
@@ -60,9 +61,6 @@ export default async function ReservasPage({ searchParams }: ReservasPageProps) 
     gestoes.find((g) => g.id === requestedGestaoId) ?? gestoes[0] ?? null;
   if (!gestaoAtiva) redirect("/onboarding");
 
-  const contas = await listCashAccountBreakdown(gestaoAtiva.id);
-  const reservas = contas.filter((c) => c.tipo === "poupanca" || c.tipo === "investimento");
-
   const hoje = new Date();
   const mesAtual = { from: isoDate(firstOfMonth(hoje)), to: isoDate(lastOfMonth(hoje)) };
   const mesAnterior = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
@@ -70,49 +68,54 @@ export default async function ReservasPage({ searchParams }: ReservasPageProps) 
   const inicioAno = isoDate(new Date(hoje.getFullYear(), 0, 1));
   const fimAno = isoDate(new Date(hoje.getFullYear(), 11, 31));
 
-  const [resumoMes, resumoMesAnt, resumoAno] = await Promise.all([
-    getReservasResumoPeriodo({ gestaoId: gestaoAtiva.id, inicio: mesAtual.from, fim: mesAtual.to }),
-    getReservasResumoPeriodo({ gestaoId: gestaoAtiva.id, inicio: mesAnt.from, fim: mesAnt.to }),
-    getReservasResumoPeriodo({ gestaoId: gestaoAtiva.id, inicio: inicioAno, fim: fimAno }),
-  ]);
+  const [contas, resumoMes, resumoMesAnt, resumoAno] = await timeServerAsync(
+    "dashboard/reservas/resumos",
+    () =>
+      Promise.all([
+        listCashAccountBreakdown(gestaoAtiva.id),
+        getReservasResumoPeriodo({ gestaoId: gestaoAtiva.id, inicio: mesAtual.from, fim: mesAtual.to }),
+        getReservasResumoPeriodo({ gestaoId: gestaoAtiva.id, inicio: mesAnt.from, fim: mesAnt.to }),
+        getReservasResumoPeriodo({ gestaoId: gestaoAtiva.id, inicio: inicioAno, fim: fimAno }),
+      ]),
+  );
+
+  const reservas = contas.filter((c) => c.tipo === "poupanca" || c.tipo === "investimento");
 
   const totalReservado = reservas.reduce((acc, c) => acc + Number(c.saldo_atual ?? 0), 0);
 
-  const movimentosPorConta = await Promise.all(
-    reservas.map(async (c) => ({
-      conta: c,
-      movimentos: await listLancamentosForContaRange({
-        gestaoId: gestaoAtiva.id,
-        contaId: c.id,
-        dateFrom: inicioAno,
-        dateTo: fimAno,
-      }),
-    })),
+  const movimentosPorConta = await timeServerAsync(
+    "dashboard/reservas/movimentos",
+    () =>
+      Promise.all(
+        reservas.map(async (c) => ({
+          conta: c,
+          movimentos: await listLancamentosForContaRange({
+            gestaoId: gestaoAtiva.id,
+            contaId: c.id,
+            dateFrom: inicioAno,
+            dateTo: fimAno,
+            order: "desc",
+            limit: 50,
+          }),
+        })),
+      ),
   );
 
   return (
-    <main className="min-h-screen bg-background px-3 py-3 sm:px-6 sm:py-6 lg:px-10 lg:py-10">
-      <div className="mx-auto max-w-5xl space-y-4">
-        <header className="rounded-[1.4rem] border border-line bg-surface p-4 sm:p-6">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[11px] tracking-[0.18em] text-muted uppercase">Reservas</p>
-              <h1 className="mt-2 font-heading text-2xl font-semibold leading-tight sm:text-3xl">
-                Suas poupanças
-              </h1>
-              <p className="mt-1.5 text-sm text-muted">
-                Saldo total reservado: <strong>{money(totalReservado)}</strong>
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <DashboardAppNav active="reservas" gestaoId={gestaoAtiva.id} />
-              </div>
-              <SignOutButton />
-            </div>
-          </div>
-        </header>
+    <DashboardPageShell>
+      <DashboardPageHeader
+        active="reservas"
+        gestaoId={gestaoAtiva.id}
+        kicker="Reservas"
+        subtitle={
+          <>
+            Saldo total reservado: <strong>{money(totalReservado)}</strong>
+          </>
+        }
+        title="Suas poupanças"
+      />
 
+      <DashboardStack>
         <section className="grid gap-3 md:grid-cols-2">
           {reservas.map((c) => (
             <article key={c.id} className="rounded-[1.4rem] border border-line bg-surface p-4 sm:p-5">
@@ -196,7 +199,7 @@ export default async function ReservasPage({ searchParams }: ReservasPageProps) 
                     </tr>
                   </thead>
                   <tbody>
-                    {movimentos.slice(0, 50).map((m) => {
+                    {movimentos.map((m) => {
                       const eEntrada =
                         (m.tipo === "transferencia" && m.conta_destino_id === conta.id) ||
                         m.tipo === "receita" ||
@@ -222,7 +225,7 @@ export default async function ReservasPage({ searchParams }: ReservasPageProps) 
             )}
           </section>
         ))}
-      </div>
-    </main>
+      </DashboardStack>
+    </DashboardPageShell>
   );
 }

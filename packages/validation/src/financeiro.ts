@@ -144,6 +144,8 @@ export const gerarPrevistosPlanoFixosMesSchema = z.object({
   gestaoId: z.coerce.number().int().positive(),
   /** Mês em que os previstos serão criados (competência). */
   anoMesDestino: z.string().regex(/^\d{4}-\d{2}$/, "Use o formato AAAA-MM."),
+  /** Data exata para lançar os itens marcados. */
+  competenciaData: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   /** Se enviado, atualiza o modelo antes de gerar (mesmo clique). */
   itens: z.array(planoFixosMesItemSchema).max(40).optional(),
 });

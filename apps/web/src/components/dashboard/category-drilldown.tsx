@@ -114,7 +114,11 @@ export function CategoryDrilldown({
 
             <div className="category-modal-list">
               {selectedGroup.items.map((item) => (
-                <form action={updateLancamentoAction} className="category-edit-row" key={item.id}>
+                <form
+                  action={updateLancamentoAction as (formData: FormData) => Promise<void>}
+                  className="category-edit-row"
+                  key={item.id}
+                >
                   <input name="gestaoId" type="hidden" value={gestaoId} />
                   <input name="lancamentoId" type="hidden" value={item.id} />
                   <input name="descricao" type="hidden" value={item.descricao} />

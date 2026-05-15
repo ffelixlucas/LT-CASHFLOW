@@ -2,10 +2,12 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { SignOutButton } from "@/components/auth/sign-out-button";
-import { DashboardAppNav } from "@/components/dashboard/dashboard-app-nav";
+import { DashboardPageHeader } from "@/components/dashboard/dashboard-page-header";
+import { DashboardPageShell } from "@/components/dashboard/dashboard-page-shell";
+import { DashboardStack } from "@/components/dashboard/dashboard-stack";
 import { RecentLancamentosTable } from "@/components/dashboard/recent-lancamentos-table";
 import { requireUser } from "@/lib/server/auth";
+import { timeServerAsync } from "@/lib/server/dashboard-server-timing";
 import {
   boundsForCalendarMonth,
   getGestaoInsightsParaMes,
@@ -170,19 +172,21 @@ export default async function MesesPage({ searchParams }: MesesPageProps) {
     lancamentosMes,
     contas,
     categorias,
-  ] = await Promise.all([
-    getGestaoInsightsParaMes(gestaoAtiva.id, anoMes),
-    listGestaoFluxoUltimosMeses(gestaoAtiva.id, 6),
-    listRevisarDuplicidadesMes(gestaoAtiva.id, anoMes),
-    listRevisarMicrovaloresMes(gestaoAtiva.id, anoMes),
-    listLancamentosPorPeriodo({
-      gestaoId: gestaoAtiva.id,
-      dateFrom: from,
-      dateTo: to,
-    }),
-    listContas(gestaoAtiva.id),
-    listCategorias(gestaoAtiva.id),
-  ]);
+  ] = await timeServerAsync("dashboard/meses/data", () =>
+    Promise.all([
+      getGestaoInsightsParaMes(gestaoAtiva.id, anoMes),
+      listGestaoFluxoUltimosMeses(gestaoAtiva.id, 6),
+      listRevisarDuplicidadesMes(gestaoAtiva.id, anoMes),
+      listRevisarMicrovaloresMes(gestaoAtiva.id, anoMes),
+      listLancamentosPorPeriodo({
+        gestaoId: gestaoAtiva.id,
+        dateFrom: from,
+        dateTo: to,
+      }),
+      listContas(gestaoAtiva.id),
+      listCategorias(gestaoAtiva.id),
+    ]),
+  );
 
   const despesasVisiveis = lancamentosMes.filter(
     (item) =>
@@ -245,20 +249,16 @@ export default async function MesesPage({ searchParams }: MesesPageProps) {
   const projDesp = Number(insights.projecaoDespesaFimMes);
 
   return (
-    <main className="report-page">
-      <header className="compact-header">
-        <div>
-          <h1>Meses</h1>
-          <p className="muted">
-            {gestaoAtiva.nome} · Como foi esse mês e como compara com antes
-          </p>
-        </div>
-        <div className="print-actions">
-          <DashboardAppNav active="meses" gestaoId={gestaoAtiva.id} />
-          <SignOutButton />
-        </div>
-      </header>
+    <DashboardPageShell>
+      <DashboardPageHeader
+        active="meses"
+        gestaoId={gestaoAtiva.id}
+        kicker="Visão mensal"
+        subtitle={`${gestaoAtiva.nome} · Como foi esse mês e como compara com antes`}
+        title="Meses"
+      />
 
+      <DashboardStack>
       <section className="card full" style={{ marginTop: 12 }}>
         <div className="period-head summary-head">
           <div>
@@ -625,6 +625,7 @@ export default async function MesesPage({ searchParams }: MesesPageProps) {
         {" · "}
         <Link href={`/dashboard/cartao${gestaoQuery}`}>Cartão de crédito</Link>
       </p>
-    </main>
+      </DashboardStack>
+    </DashboardPageShell>
   );
 }

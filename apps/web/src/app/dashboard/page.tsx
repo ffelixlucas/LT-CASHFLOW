@@ -1,23 +1,20 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { computeCardStatement } from "@ltcashflow/finance-core";
-
-import { SignOutButton } from "@/components/auth/sign-out-button";
 import { BrandLogo } from "@/components/brand/brand-logo";
 import { CategoryDrilldown } from "@/components/dashboard/category-drilldown";
-import { DashboardActionCenter } from "@/components/dashboard/dashboard-action-center";
-import { DashboardAppNav } from "@/components/dashboard/dashboard-app-nav";
+import { DashboardPageHeader } from "@/components/dashboard/dashboard-page-header";
+import { DashboardPageShell } from "@/components/dashboard/dashboard-page-shell";
+import { DashboardStack } from "@/components/dashboard/dashboard-stack";
 import { PlanoFixosMesModal } from "@/components/dashboard/plano-fixos-mes-modal";
 import { requireUser } from "@/lib/server/auth";
+import { timeServerAsync } from "@/lib/server/dashboard-server-timing";
 import {
   getContaCorrentePeriodoResumo,
-  getGestaoInsights,
   getGestaoSaldosPorBucket,
-  fetchGastosFixosDashboardSlice,
   getPlanoFixosTemplateItens,
+  getResumoFaturasCartaoGestao,
   listCashAccountBreakdown,
-  listCreditCardStatementData,
   listCategorias,
   listContas,
   listLancamentosPorPeriodo,
@@ -232,87 +229,66 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     redirect("/onboarding");
   }
 
-  const contas = await listContas(gestaoAtiva.id);
-  const categorias = await listCategorias(gestaoAtiva.id);
-  const categoriasDespesa = categorias.filter((categoria) => categoria.natureza !== "receita");
-  const cashAccounts = await listCashAccountBreakdown(gestaoAtiva.id);
-  const saldosAtuais = await getGestaoSaldosPorBucket(gestaoAtiva.id);
   const hoje = new Date().toISOString().slice(0, 10);
   const periodoAtual = periodBounds(selectedPeriod);
   const periodoAno = periodBounds("year");
-  const anoMesAtual = hoje.slice(0, 7);
-  const lancamentosPeriodo = await listLancamentosPorPeriodo({
-    gestaoId: gestaoAtiva.id,
-    dateFrom: periodoAtual.from,
-    dateTo: periodoAtual.to,
-  });
-  const resumoContaCorrentePeriodo = await getContaCorrentePeriodoResumo({
-    gestaoId: gestaoAtiva.id,
-    dateFrom: periodoAtual.from,
-    dateTo: periodoAtual.to,
-  });
-  const cartoesComCiclo = await listCreditCardStatementData(gestaoAtiva.id);
-  const [, planoFixosTemplateItens] = await Promise.all([
-    fetchGastosFixosDashboardSlice({
-      gestaoId: gestaoAtiva.id,
-      userId: user.id,
-      anoMes: anoMesAtual,
-    }),
-    getPlanoFixosTemplateItens(gestaoAtiva.id),
-  ]);
+  const [
+    contas,
+    categorias,
+    cashAccounts,
+    saldosAtuais,
+    lancamentosPeriodo,
+    resumoContaCorrentePeriodo,
+    planoFixosTemplateItens,
+    resumoFaturasCartao,
+  ] = await timeServerAsync("dashboard/home/data", async () =>
+    Promise.all([
+      listContas(gestaoAtiva.id),
+      listCategorias(gestaoAtiva.id),
+      listCashAccountBreakdown(gestaoAtiva.id),
+      getGestaoSaldosPorBucket(gestaoAtiva.id),
+      listLancamentosPorPeriodo({
+        gestaoId: gestaoAtiva.id,
+        dateFrom: periodoAtual.from,
+        dateTo: periodoAtual.to,
+      }),
+      getContaCorrentePeriodoResumo({
+        gestaoId: gestaoAtiva.id,
+        dateFrom: periodoAtual.from,
+        dateTo: periodoAtual.to,
+      }),
+      getPlanoFixosTemplateItens(gestaoAtiva.id),
+      getResumoFaturasCartaoGestao(gestaoAtiva.id, hoje),
+    ]),
+  );
+  const categoriasDespesa = categorias.filter((categoria) => categoria.natureza !== "receita");
   const baseRealFrom = gestaoAtiva.inicio_em
     ? new Date(gestaoAtiva.inicio_em).toISOString().slice(0, 10)
     : periodoAno.from;
-  const insightsMes =
-    selectedPeriod === "month" ? await getGestaoInsights(gestaoAtiva.id) : null;
   const guardadoAtual = Number(saldosAtuais.poupanca ?? 0) + Number(saldosAtuais.investimento ?? 0);
   const disponivelAtual = Number(saldosAtuais.disponivel ?? 0);
   const tenhoHoje = disponivelAtual + guardadoAtual;
-  const resumoCartao = cartoesComCiclo.reduce(
-    (acc, card) => {
-      const contaCartao = contas.find((conta) => conta.id === card.id);
-      const fechamentoDia = card.fechamento_dia ?? 8;
-      const vencimentoDia = card.vencimento_dia ?? 15;
-      const limiteTotal = Number(card.limite_credito ?? 0);
-      const statement = computeCardStatement({
-        fechamentoDia,
-        vencimentoDia,
-        limiteTotal: limiteTotal > 0 ? limiteTotal : undefined,
-        saldoInicialAberto: Number(contaCartao?.saldo_inicial ?? 0),
-        transacoes: (card.movimentos ?? [])
-          .filter((movement) => movement.conta_id === card.id && movement.tipo === "despesa")
-          .map((movement) => ({
-            valor: Number(movement.valor_total),
-            status: movement.status,
-            competenciaData: movement.competencia_data,
-          })),
-        pagamentos: (card.movimentos ?? [])
-          .filter(
-            (movement) =>
-              movement.conta_destino_id === card.id &&
-              (movement.tipo === "transferencia" || movement.tipo === "receita"),
-          )
-          .map((movement) => ({
-            valor: Number(movement.valor_total),
-            status: movement.status,
-            data: movement.competencia_data,
-          })),
-      });
-
-      acc.compras += statement.totalFaturaAtual;
-      acc.pagamentos += statement.totalPagoFaturaAtual;
-      acc.saldo += statement.saldoFaturaAtual;
-      return acc;
-    },
-    { compras: 0, pagamentos: 0, saldo: 0 },
-  );
+  const resumoCartao = {
+    compras: resumoFaturasCartao.totalComprasFatura,
+    pagamentos: resumoFaturasCartao.totalPagamentosCorrente,
+    saldo: resumoFaturasCartao.totalSaldoFatura,
+    faturaCompetenciaData: resumoFaturasCartao.cartoes[0]?.faturaCompetenciaData ?? null,
+    pagamentosConfiaveis:
+      resumoFaturasCartao.cartoes.length === 0 ||
+      resumoFaturasCartao.cartoes.every((c) => c.pagamentosConfiaveis),
+  };
+  const faturaCartaoLabel = resumoCartao.faturaCompetenciaData
+    ? new Intl.DateTimeFormat("pt-BR", { month: "short", year: "numeric", timeZone: "UTC" }).format(
+        new Date(`${resumoCartao.faturaCompetenciaData}T12:00:00Z`),
+      )
+    : null;
   const dataHoje = todayLabel();
   const entradasPeriodo = Number(resumoContaCorrentePeriodo.entradas ?? 0);
   const saidasPeriodo = Number(resumoContaCorrentePeriodo.saidas_total ?? 0);
   const sobraPeriodo = Number(resumoContaCorrentePeriodo.sobra ?? 0);
   const reservaLiquida =
     Number(resumoContaCorrentePeriodo.guardado ?? 0) - Number(resumoContaCorrentePeriodo.resgatado ?? 0);
-  const totalPatrimonio = tenhoHoje + Math.max(0, resumoCartao.saldo);
+  const patrimonioLiquido = tenhoHoje - Math.max(0, resumoCartao.saldo);
   const reservaPct = tenhoHoje > 0 ? (guardadoAtual / tenhoHoje) * 100 : 0;
   const fluxoLabel =
     sobraPeriodo >= 0
@@ -342,8 +318,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const maiorCategoria = totaisPorCategoria[0] ?? null;
   const maioresContas = [...cashAccounts].sort((a, b) => Number(b.saldo_atual ?? 0) - Number(a.saldo_atual ?? 0)).slice(0, 4);
   const ultimosLancamentos = lancamentosPeriodo.slice(0, 6);
-  const projectionBalance =
-    insightsMes ? Number(insightsMes.receitasMesAtual) - Number(insightsMes.projecaoDespesaFimMes) : null;
   const precisaEstadoInicial = contas.some(
     (c) =>
       (c.tipo === "corrente" ||
@@ -371,25 +345,22 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const startStepResolved = startStep;
   const showPrimeiroPasso = !contas.length || precisaEstadoInicial;
   return (
-    <main className="report-page">
-      <header className="compact-header">
-        <div className="dashboard-brand-block">
-          <BrandLogo priority variant="dashboard" />
-          <div>
-            <p className="dashboard-kicker">{gestaoEhFamiliar ? "Gestão familiar" : "Gestão pessoal"}</p>
-            <h1>{gestaoAtiva.nome}</h1>
-            <p className="muted">
-              {dataHoje}
-              {gestaoAtiva ? ` · ${periodoAtual.range}` : ""}
-            </p>
-          </div>
-        </div>
-        <div className="print-actions">
-          <DashboardAppNav active="inicio" gestaoId={gestaoAtiva.id} />
-          <SignOutButton />
-        </div>
-      </header>
+    <DashboardPageShell>
+      <DashboardPageHeader
+        active="inicio"
+        brand={<BrandLogo priority variant="dashboard" />}
+        gestaoId={gestaoAtiva.id}
+        kicker={gestaoEhFamiliar ? "Gestão familiar" : "Gestão pessoal"}
+        subtitle={
+          <>
+            {dataHoje}
+            {gestaoAtiva ? ` · ${periodoAtual.range}` : ""}
+          </>
+        }
+        title={gestaoAtiva.nome}
+      />
 
+      <DashboardStack>
       {gestaoAtiva ? (
         <>
           <section className="decision-hero" id="resumo">
@@ -462,14 +433,25 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               </p>
             </Link>
             <Link className="decision-card link-card" href={`/dashboard/cartao?gestao=${gestaoAtiva.id}`}>
-              <span>Cartão</span>
+              <span>{resumoCartao.saldo > 0 ? "Cartão a fechar" : "Saldo do cartão"}</span>
               <strong>{money(resumoCartao.saldo)}</strong>
-              <p>{money(resumoCartao.compras)} em compras no ciclo atual.</p>
+              <p className="card-inline-metrics">
+                {faturaCartaoLabel ? `Fatura ${faturaCartaoLabel}` : "Fatura atual"} · compras{" "}
+                <b>{money(resumoCartao.compras)}</b>
+                {resumoCartao.pagamentos > 0 && resumoCartao.pagamentosConfiaveis ? (
+                  <>
+                    {" "}· pago <b>{money(resumoCartao.pagamentos)}</b>
+                  </>
+                ) : resumoCartao.pagamentos === 0 ? (
+                  " · sem pagamento"
+                ) : null}
+                .
+              </p>
             </Link>
             <article className="decision-card">
-              <span>Patrimônio mapeado</span>
-              <strong>{money(totalPatrimonio)}</strong>
-              <p>Corrente, reservas e fatura em aberto vistos em conjunto.</p>
+              <span>Patrimônio líquido</span>
+              <strong>{money(patrimonioLiquido)}</strong>
+              <p>Corrente e reservas descontando a fatura em aberto.</p>
             </article>
           </section>
 
@@ -495,7 +477,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             <PlanoFixosMesModal
               categoriasDespesa={categoriasDespesa.map((c) => ({ id: c.id, nome: c.nome }))}
               contas={contas.map((c) => ({ id: c.id, nome: c.nome, tipo: c.tipo }))}
-              defaultMesDestino={anoMesAtual}
               gestaoId={gestaoAtiva.id}
               initialItens={planoFixosTemplateItens}
             />
@@ -520,23 +501,24 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                   <strong>{maiorCategoria ? `${maiorCategoria.name} · ${money(maiorCategoria.value)}` : "Sem gastos"}</strong>
                 </div>
                 <div className="signal-row">
-                  <span>Movimento da reserva</span>
+                  <span>
+                    Reservas no período
+                    <small>{periodoAtual.mapped}</small>
+                  </span>
                   <strong className={reservaLiquida >= 0 ? "good" : "bad"}>{signedMoney(reservaLiquida)}</strong>
                 </div>
               </div>
-              {insightsMes && projectionBalance !== null ? (
-                <p className="projection-note">
-                {Number(insightsMes.receitasMesAtual) - Number(insightsMes.projecaoDespesaFimMes) >= 0 ? (
+              <p className="projection-note">
+                {sobraPeriodo >= 0 ? (
                   <>
-                    Projeção de fechamento: <strong className="good">{money(projectionBalance)}</strong>.
+                    Recorte positivo: <strong className="good">{signedMoney(sobraPeriodo)}</strong>.
                   </>
                 ) : (
                   <>
-                    Projeção de falta: <strong className="bad">{money(Math.abs(projectionBalance))}</strong>.
+                    Recorte negativo: <strong className="bad">{signedMoney(sobraPeriodo)}</strong>.
                   </>
                 )}
-                </p>
-              ) : null}
+              </p>
             </article>
 
             <article className="analysis-panel">
@@ -633,14 +615,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             </div>
           </section>
 
-          <section className="quick-action-panel">
-            <div>
-              <p className="dashboard-kicker">Operação</p>
-              <h3>Lançar ou corrigir agora</h3>
-            </div>
-            <DashboardActionCenter categorias={categorias} contas={contas} gestaoId={gestaoAtiva.id} hoje={hoje} />
-          </section>
-
           <p className="dashboard-footnote">
             Base real desde {formatYearDay(baseRealFrom)}. Dados financeiros refletem lançamentos liquidados e não cancelados.
           </p>
@@ -653,6 +627,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           </p>
         </section>
       )}
-    </main>
+      </DashboardStack>
+    </DashboardPageShell>
   );
 }

@@ -1,5 +1,11 @@
 import "server-only";
 
+import {
+  computeFaturaCompetenciaParaCompra,
+  computeSaldoFaturaCartao,
+  normalizeFaturaMesKey,
+  resolveFaturaCompetenciaAberta,
+} from "@ltcashflow/finance-core";
 import { planoFixosMesItemSchema } from "@ltcashflow/validation";
 import type { LancamentoMeio, PlanoFixosMesItem } from "@ltcashflow/validation";
 import { z } from "zod";
@@ -1078,30 +1084,7 @@ export async function updateCategoria(input: {
   return result.affectedRows > 0;
 }
 
-/**
- * Calcula a `fatura_competencia_data` (primeiro dia do mês de vencimento da fatura)
- * para uma compra de cartão. Regra observada nos dados:
- *  - se `dia da compra < fechamento_dia`  → fatura no mês seguinte (mês + 1).
- *  - se `dia da compra >= fechamento_dia` → fatura pula um mês (mês + 2).
- */
-export function computeFaturaCompetenciaParaCompra(
-  competenciaData: string,
-  fechamentoDia: number,
-): string {
-  const [yearRaw, monthRaw, dayRaw] = competenciaData.split("-").map(Number);
-  const year = yearRaw ?? 1970;
-  const month = monthRaw ?? 1;
-  const day = dayRaw ?? 1;
-
-  let targetMonth = day >= fechamentoDia ? month + 2 : month + 1;
-  let targetYear = year;
-  while (targetMonth > 12) {
-    targetMonth -= 12;
-    targetYear += 1;
-  }
-
-  return `${targetYear}-${String(targetMonth).padStart(2, "0")}-01`;
-}
+export { computeFaturaCompetenciaParaCompra } from "@ltcashflow/finance-core";
 
 export async function createLancamento(input: {
   gestaoId: number;
@@ -1933,12 +1916,16 @@ export async function syncLancamentosPrevistosFromPlanoFixosMes(input: {
   userId: number;
   /** Mês de competência dos lançamentos (AAAA-MM). */
   anoMes: string;
+  /** Quando informado, todos os itens são lançados nesta data. */
+  competenciaData?: string;
+  /** Quando informado, lança só esta seleção em vez do modelo salvo inteiro. */
+  itens?: PlanoFixosMesItem[];
 }): Promise<{ created: number; updated: number; skipped: number }> {
   let created = 0;
   let updated = 0;
   let skipped = 0;
 
-  const itens = await getPlanoFixosTemplateItens(input.gestaoId);
+  const itens = input.itens ?? (await getPlanoFixosTemplateItens(input.gestaoId));
   if (itens.length === 0) {
     return { created, updated, skipped };
   }
@@ -1950,16 +1937,10 @@ export async function syncLancamentosPrevistosFromPlanoFixosMes(input: {
       continue;
     }
 
-    let competenciaData: string;
-    if (
-      item.competenciaData &&
-      /^\d{4}-\d{2}-\d{2}$/.test(item.competenciaData) &&
-      item.competenciaData.startsWith(`${input.anoMes}-`)
-    ) {
-      competenciaData = item.competenciaData;
-    } else {
-      competenciaData = buildMonthCalendarDate(input.anoMes, item.dia);
-    }
+    const competenciaData =
+      input.competenciaData && /^\d{4}-\d{2}-\d{2}$/.test(input.competenciaData)
+        ? input.competenciaData
+        : buildMonthCalendarDate(input.anoMes, item.dia);
 
     const anoMesChave = competenciaData.slice(0, 7);
     const vencimentoData = competenciaData;
@@ -3189,6 +3170,10 @@ export async function listLancamentosForContaRange(input: {
   dateFrom?: string;
   dateTo?: string;
   dateField?: "competencia" | "fatura";
+  /** Ordenação por competência (padrão asc). “desc” = mais recentes primeiro. */
+  order?: "asc" | "desc";
+  /** Limite de linhas (1–500). Útil quando a UI mostra só os últimos N. */
+  limit?: number;
 }) {
   const filters: SearchLancamentosInput = {
     gestaoId: input.gestaoId,
@@ -3198,8 +3183,16 @@ export async function listLancamentosForContaRange(input: {
     dateField: input.dateField,
   };
   const { conditions, params } = buildLancamentoFilters(filters);
+  const competenciaOrder =
+    input.order === "desc" ? ORDER_BY_LANCAMENTO_RECIENTE_DESC : ORDER_BY_LANCAMENTO_RECIENTE_ASC;
   const orderBy =
-    input.dateField === "fatura" ? ORDER_BY_LANCAMENTO_FATURA_ASC : ORDER_BY_LANCAMENTO_RECIENTE_ASC;
+    input.dateField === "fatura" ? ORDER_BY_LANCAMENTO_FATURA_ASC : competenciaOrder;
+
+  const limitN =
+    input.limit != null && Number.isFinite(Number(input.limit))
+      ? Math.min(500, Math.max(1, Math.floor(Number(input.limit))))
+      : null;
+  const limitSql = limitN != null ? ` LIMIT ${limitN}` : "";
 
   const [rows] = await pool.query<LancamentoRow[]>(
     `
@@ -3230,7 +3223,7 @@ export async function listLancamentosForContaRange(input: {
       LEFT JOIN categorias c
         ON c.id = l.categoria_id
       WHERE ${conditions.join(" AND ")}
-      ORDER BY ${orderBy}
+      ORDER BY ${orderBy}${limitSql}
     `,
     params,
   );
@@ -3673,6 +3666,8 @@ export type MesResumoFluxo = {
   mes: string;
   receitas: string;
   despesas: string;
+  guardado?: string;
+  resgatado?: string;
 };
 
 /** Últimos `count` meses civis (incluindo o mês corrente), com totais por mês. */
@@ -3688,7 +3683,15 @@ export async function listGestaoFluxoUltimosMeses(
   const to = `${end.getFullYear()}-${pad2(end.getMonth() + 1)}-${pad2(end.getDate())}`;
 
   const [rows] = await pool.query<
-    Array<RowDataPacket & { ym: string; receitas: string | null; despesas: string | null }>
+    Array<
+      RowDataPacket & {
+        ym: string;
+        receitas: string | null;
+        despesas: string | null;
+        guardado: string | null;
+        resgatado: string | null;
+      }
+    >
   >(
     `
       SELECT
@@ -3696,8 +3699,16 @@ export async function listGestaoFluxoUltimosMeses(
         COALESCE(SUM(CASE WHEN l.tipo = 'receita' AND l.status <> 'cancelado' THEN l.valor_total ELSE 0 END), 0)
           AS receitas,
         COALESCE(SUM(CASE WHEN l.tipo = 'despesa' AND l.status <> 'cancelado' THEN l.valor_total ELSE 0 END), 0)
-          AS despesas
+          AS despesas,
+        COALESCE(SUM(CASE WHEN l.tipo = 'transferencia' AND l.status <> 'cancelado' AND ctd.tipo IN ('poupanca', 'investimento') THEN l.valor_total ELSE 0 END), 0)
+          AS guardado,
+        COALESCE(SUM(CASE WHEN l.tipo = 'transferencia' AND l.status <> 'cancelado' AND ct.tipo IN ('poupanca', 'investimento') AND ctd.tipo IN ('corrente', 'carteira', 'caixa', 'outro') THEN l.valor_total ELSE 0 END), 0)
+          AS resgatado
       FROM lancamentos l
+      INNER JOIN contas ct
+        ON ct.id = l.conta_id
+      LEFT JOIN contas ctd
+        ON ctd.id = l.conta_destino_id
       WHERE l.gestao_id = ?
         AND ${SQL_L_DATA_RECORTE_GESTAO} >= ?
         AND ${SQL_L_DATA_RECORTE_GESTAO} <= ?
@@ -3718,8 +3729,76 @@ export async function listGestaoFluxoUltimosMeses(
       mes: ym,
       receitas: row?.receitas ?? "0",
       despesas: row?.despesas ?? "0",
+      guardado: row?.guardado ?? "0",
+      resgatado: row?.resgatado ?? "0",
     });
   }
+  return out;
+}
+
+/** Meses civis dentro de um período real, sem puxar meses anteriores ao recorte. */
+export async function listGestaoFluxoMesesPeriodo(input: {
+  gestaoId: number;
+  dateFrom: string;
+  dateTo: string;
+}): Promise<MesResumoFluxo[]> {
+  const [rows] = await pool.query<
+    Array<
+      RowDataPacket & {
+        ym: string;
+        receitas: string | null;
+        despesas: string | null;
+        guardado: string | null;
+        resgatado: string | null;
+      }
+    >
+  >(
+    `
+      SELECT
+        DATE_FORMAT(${SQL_L_DATA_RECORTE_GESTAO}, '%Y-%m') AS ym,
+        COALESCE(SUM(CASE WHEN l.tipo = 'receita' AND l.status <> 'cancelado' THEN l.valor_total ELSE 0 END), 0)
+          AS receitas,
+        COALESCE(SUM(CASE WHEN l.tipo = 'despesa' AND l.status <> 'cancelado' THEN l.valor_total ELSE 0 END), 0)
+          AS despesas,
+        COALESCE(SUM(CASE WHEN l.tipo = 'transferencia' AND l.status <> 'cancelado' AND ctd.tipo IN ('poupanca', 'investimento') THEN l.valor_total ELSE 0 END), 0)
+          AS guardado,
+        COALESCE(SUM(CASE WHEN l.tipo = 'transferencia' AND l.status <> 'cancelado' AND ct.tipo IN ('poupanca', 'investimento') AND ctd.tipo IN ('corrente', 'carteira', 'caixa', 'outro') THEN l.valor_total ELSE 0 END), 0)
+          AS resgatado
+      FROM lancamentos l
+      INNER JOIN contas ct
+        ON ct.id = l.conta_id
+      LEFT JOIN contas ctd
+        ON ctd.id = l.conta_destino_id
+      WHERE l.gestao_id = ?
+        AND ${SQL_L_DATA_RECORTE_GESTAO} >= ?
+        AND ${SQL_L_DATA_RECORTE_GESTAO} <= ?
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixo("l")}
+      GROUP BY DATE_FORMAT(${SQL_L_DATA_RECORTE_GESTAO}, '%Y-%m')
+      ORDER BY ym ASC
+    `,
+    [input.gestaoId, input.dateFrom, input.dateTo],
+  );
+
+  const byYm = new Map(rows.map((r) => [r.ym, r]));
+  const start = new Date(`${input.dateFrom}T12:00:00Z`);
+  const end = new Date(`${input.dateTo}T12:00:00Z`);
+  const out: MesResumoFluxo[] = [];
+  let cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1, 12));
+  const last = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1, 12));
+
+  while (cursor <= last) {
+    const ym = `${cursor.getUTCFullYear()}-${pad2(cursor.getUTCMonth() + 1)}`;
+    const row = byYm.get(ym);
+    out.push({
+      mes: ym,
+      receitas: row?.receitas ?? "0",
+      despesas: row?.despesas ?? "0",
+      guardado: row?.guardado ?? "0",
+      resgatado: row?.resgatado ?? "0",
+    });
+    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1, 12));
+  }
+
   return out;
 }
 
@@ -4103,20 +4182,46 @@ const SQL_NOT_PAGAMENTO_FATURA = `
   NOT (
     l.descricao LIKE 'Pagamento efetuado - Fatura Cartão Inter%'
     OR l.descricao LIKE 'Pagamento efetuado - Fatura Cartao Inter%'
-    OR l.descricao LIKE '%Fatura Cartão%'
-    OR l.descricao LIKE '%Fatura Cartao%'
+    OR l.descricao LIKE 'Pagamento Fatura -%'
+    OR l.descricao LIKE 'Pagamento efetuado - Fatura Cart%'
+    OR (COALESCE(c.nome, '') = 'Saida da conta' AND (
+      l.descricao LIKE '%Fatura Cartão%'
+      OR l.descricao LIKE '%Fatura Cartao%'
+    ))
   )
 `;
 
-/** Despesa na corrente que é pagamento de fatura (para detalhe dia a dia). */
+/** Despesa na corrente que é pagamento de fatura (extrato / categoria Saida da conta). */
 const SQL_PAGAMENTO_FATURA = `
   (
     l.descricao LIKE 'Pagamento efetuado - Fatura Cartão Inter%'
     OR l.descricao LIKE 'Pagamento efetuado - Fatura Cartao Inter%'
-    OR l.descricao LIKE '%Fatura Cartão%'
-    OR l.descricao LIKE '%Fatura Cartao%'
+    OR l.descricao LIKE 'Pagamento Fatura -%'
+    OR l.descricao LIKE 'Pagamento efetuado - Fatura Cart%'
+    OR (COALESCE(c.nome, '') = 'Saida da conta' AND (
+      l.descricao LIKE '%Fatura Cartão%'
+      OR l.descricao LIKE '%Fatura Cartao%'
+    ))
   )
 `;
+
+export type ResumoFaturaCartao = {
+  contaCartaoId: number;
+  nome: string;
+  faturaCompetenciaData: string;
+  comprasFatura: number;
+  pagamentosCorrente: number;
+  creditosNoCartao: number;
+  saldoFatura: number;
+  pagamentosConfiaveis: boolean;
+};
+
+export type ResumoFaturasCartaoGestao = {
+  cartoes: ResumoFaturaCartao[];
+  totalComprasFatura: number;
+  totalPagamentosCorrente: number;
+  totalSaldoFatura: number;
+};
 
 /** Calcula as metricas chave de uma semana (sem persistir). */
 export async function getSemanaMetricas(input: {
@@ -4169,6 +4274,7 @@ export async function getSemanaMetricas(input: {
         ) AS compras_cartao
       FROM lancamentos l
       INNER JOIN contas ct ON ct.id = l.conta_id
+      LEFT JOIN categorias c ON c.id = l.categoria_id
       WHERE l.gestao_id = ?
         AND l.status <> 'cancelado'
         AND l.competencia_data >= ?
@@ -4191,33 +4297,389 @@ export async function getSemanaMetricas(input: {
   };
 }
 
-/**
- * Soma dos pagamentos de fatura (despesa na corrente com descrição "Fatura Cart…")
- * dentro de uma janela típica do ciclo da fatura `X-01`. Considera pagamentos
- * cujo `competencia_data` cai entre 7 dias antes e 14 dias depois da fatura,
- * cobrindo pagamentos antecipados e atrasos de uma a duas semanas.
- */
-export async function getPagamentosFaturaParaCiclo(input: {
+/** Pagamentos de fatura na corrente atribuídos à fatura `YYYY-MM-01` (sem janela de datas). */
+export async function getPagamentosFaturaPorFaturaCompetencia(input: {
   gestaoId: number;
   faturaCompetenciaData: string;
 }): Promise<number> {
+  const faturaKey = normalizeFaturaMesKey(input.faturaCompetenciaData);
+
   const [rows] = await pool.query<Array<RowDataPacket & { total: string | null }>>(
     `
       SELECT COALESCE(SUM(l.valor_total), 0) AS total
       FROM lancamentos l
       INNER JOIN contas ct ON ct.id = l.conta_id
+      LEFT JOIN categorias c ON c.id = l.categoria_id
       WHERE l.gestao_id = ?
         AND l.status <> 'cancelado'
         AND l.tipo = 'despesa'
         AND ct.tipo IN ('corrente', 'carteira', 'caixa', 'outro')
         AND ${SQL_PAGAMENTO_FATURA}
-        AND l.competencia_data >= DATE_SUB(?, INTERVAL 7 DAY)
-        AND l.competencia_data <= DATE_ADD(?, INTERVAL 14 DAY)
+        AND l.fatura_competencia_data IS NOT NULL
+        AND DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-01') = ?
     `,
-    [input.gestaoId, input.faturaCompetenciaData, input.faturaCompetenciaData],
+    [input.gestaoId, faturaKey],
   );
 
   return Number(rows[0]?.total ?? 0);
+}
+
+export type MovimentoFaturaCartao = {
+  tipo: "compra" | "pagamento";
+  id: number;
+  competencia_data: string;
+  competencia_hora: string | null;
+  descricao: string | null;
+  categoria_nome: string;
+  conta_nome: string;
+  valor_total: number;
+};
+
+/** Meses de fatura (YYYY-MM-01) que têm compras neste cartão ou pagamentos de fatura na gestão. */
+export async function listFaturaMesKeysParaCartaoConta(input: {
+  gestaoId: number;
+  contaCartaoId: number;
+  /** Quantidade máxima de meses distintos (mais recentes). Evita varrer histórico extenso. */
+  maxMeses?: number;
+}): Promise<string[]> {
+  const maxMeses = Math.min(120, Math.max(1, Math.floor(input.maxMeses ?? 36)));
+
+  const [rows] = await pool.query<Array<RowDataPacket & { fk: string | Date }>>(
+    `
+      SELECT fk
+      FROM (
+        SELECT DISTINCT fk
+        FROM (
+          SELECT DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-01') AS fk
+          FROM lancamentos l
+          WHERE l.gestao_id = ?
+            AND l.conta_id = ?
+            AND l.tipo = 'despesa'
+            AND l.status <> 'cancelado'
+            AND l.fatura_competencia_data IS NOT NULL
+            AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixoBare()}
+          UNION ALL
+          SELECT DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-01') AS fk
+          FROM lancamentos l
+          INNER JOIN contas ct ON ct.id = l.conta_id
+          LEFT JOIN categorias c ON c.id = l.categoria_id
+          WHERE l.gestao_id = ?
+            AND l.tipo = 'despesa'
+            AND l.status <> 'cancelado'
+            AND l.fatura_competencia_data IS NOT NULL
+            AND ct.tipo IN ('corrente', 'carteira', 'caixa', 'outro')
+            AND ${SQL_PAGAMENTO_FATURA}
+        ) t
+        WHERE fk IS NOT NULL
+      ) d
+      ORDER BY fk DESC
+      LIMIT ?
+    `,
+    [input.gestaoId, input.contaCartaoId, input.gestaoId, maxMeses],
+  );
+
+  return rows.map((row) => normalizeFaturaMesKey(String(row.fk)));
+}
+
+/** Compras no cartão e pagamentos na corrente atribuídos à mesma fatura (YYYY-MM-01). */
+export async function listMovimentosFaturaCartaoConta(input: {
+  gestaoId: number;
+  contaCartaoId: number;
+  faturaCompetenciaData: string;
+  limit?: number;
+  offset?: number;
+}): Promise<MovimentoFaturaCartao[]> {
+  const faturaKey = normalizeFaturaMesKey(input.faturaCompetenciaData);
+  const limit = input.limit ? Math.min(100, Math.max(1, Math.floor(input.limit))) : null;
+  const offset = Math.max(0, Math.floor(input.offset ?? 0));
+
+  const [rows] = await pool.query<
+    Array<
+      RowDataPacket & {
+        mov_tipo: string;
+        id: number;
+        competencia_data: string | Date;
+        competencia_hora: string | null;
+        descricao: string | null;
+        categoria_nome: string | null;
+        conta_nome: string | null;
+        valor_total: string | null;
+      }
+    >
+  >(
+    `
+      SELECT *
+      FROM (
+        (
+          SELECT
+            'compra' AS mov_tipo,
+            l.id,
+            l.competencia_data,
+            l.competencia_hora,
+            l.descricao,
+            COALESCE(c.nome, '') AS categoria_nome,
+            ct.nome AS conta_nome,
+            l.valor_total
+          FROM lancamentos l
+          INNER JOIN contas ct ON ct.id = l.conta_id
+          LEFT JOIN categorias c ON c.id = l.categoria_id
+          WHERE l.gestao_id = ?
+            AND l.conta_id = ?
+            AND l.tipo = 'despesa'
+            AND l.status <> 'cancelado'
+            AND l.fatura_competencia_data IS NOT NULL
+            AND DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-01') = ?
+            AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixo("l")}
+        )
+        UNION ALL
+        (
+          SELECT
+            'pagamento' AS mov_tipo,
+            l.id,
+            l.competencia_data,
+            l.competencia_hora,
+            l.descricao,
+            COALESCE(c.nome, '') AS categoria_nome,
+            ct.nome AS conta_nome,
+            l.valor_total
+          FROM lancamentos l
+          INNER JOIN contas ct ON ct.id = l.conta_id
+          LEFT JOIN categorias c ON c.id = l.categoria_id
+          WHERE l.gestao_id = ?
+            AND l.tipo = 'despesa'
+            AND l.status <> 'cancelado'
+            AND ct.tipo IN ('corrente', 'carteira', 'caixa', 'outro')
+            AND ${SQL_PAGAMENTO_FATURA}
+            AND l.fatura_competencia_data IS NOT NULL
+            AND DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-01') = ?
+        )
+      ) movimentos
+      ORDER BY competencia_data DESC, competencia_hora DESC, mov_tipo ASC, id DESC
+      ${limit ? "LIMIT ? OFFSET ?" : ""}
+    `,
+    limit
+      ? [input.gestaoId, input.contaCartaoId, faturaKey, input.gestaoId, faturaKey, limit, offset]
+      : [input.gestaoId, input.contaCartaoId, faturaKey, input.gestaoId, faturaKey],
+  );
+
+  return rows.map((row) => ({
+    tipo: row.mov_tipo === "pagamento" ? "pagamento" : "compra",
+    id: row.id,
+    competencia_data:
+      row.competencia_data instanceof Date
+        ? row.competencia_data.toISOString().slice(0, 10)
+        : String(row.competencia_data).slice(0, 10),
+    competencia_hora: row.competencia_hora,
+    descricao: row.descricao,
+    categoria_nome: row.categoria_nome ?? "",
+    conta_nome: row.conta_nome ?? "",
+    valor_total: Number(row.valor_total ?? 0),
+  }));
+}
+
+export async function countMovimentosFaturaCartaoConta(input: {
+  gestaoId: number;
+  contaCartaoId: number;
+  faturaCompetenciaData: string;
+}): Promise<number> {
+  const faturaKey = normalizeFaturaMesKey(input.faturaCompetenciaData);
+
+  const [rows] = await pool.query<Array<RowDataPacket & { total: string | number }>>(
+    `
+      SELECT COUNT(*) AS total
+      FROM (
+        SELECT l.id
+        FROM lancamentos l
+        WHERE l.gestao_id = ?
+          AND l.conta_id = ?
+          AND l.tipo = 'despesa'
+          AND l.status <> 'cancelado'
+          AND l.fatura_competencia_data IS NOT NULL
+          AND DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-01') = ?
+          AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixo("l")}
+        UNION ALL
+        SELECT l.id
+        FROM lancamentos l
+        INNER JOIN contas ct ON ct.id = l.conta_id
+        LEFT JOIN categorias c ON c.id = l.categoria_id
+        WHERE l.gestao_id = ?
+          AND l.tipo = 'despesa'
+          AND l.status <> 'cancelado'
+          AND ct.tipo IN ('corrente', 'carteira', 'caixa', 'outro')
+          AND ${SQL_PAGAMENTO_FATURA}
+          AND l.fatura_competencia_data IS NOT NULL
+          AND DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-01') = ?
+      ) movimentos
+    `,
+    [input.gestaoId, input.contaCartaoId, faturaKey, input.gestaoId, faturaKey],
+  );
+
+  return Number(rows[0]?.total ?? 0);
+}
+
+/** @deprecated Use getPagamentosFaturaPorFaturaCompetencia — mantido por compatibilidade. */
+export async function getPagamentosFaturaParaCiclo(input: {
+  gestaoId: number;
+  faturaCompetenciaData: string;
+}): Promise<number> {
+  return getPagamentosFaturaPorFaturaCompetencia({
+    gestaoId: input.gestaoId,
+    faturaCompetenciaData: input.faturaCompetenciaData,
+  });
+}
+
+async function sumComprasFaturaCartao(input: {
+  gestaoId: number;
+  contaCartaoId: number;
+  faturaCompetenciaData: string;
+}): Promise<number> {
+  const faturaKey = normalizeFaturaMesKey(input.faturaCompetenciaData);
+
+  const [rows] = await pool.query<Array<RowDataPacket & { total: string | null }>>(
+    `
+      SELECT COALESCE(SUM(l.valor_total), 0) AS total
+      FROM lancamentos l
+      WHERE l.gestao_id = ?
+        AND l.conta_id = ?
+        AND l.tipo = 'despesa'
+        AND l.status <> 'cancelado'
+        AND l.fatura_competencia_data IS NOT NULL
+        AND DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-01') = ?
+        AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixoBare()}
+    `,
+    [input.gestaoId, input.contaCartaoId, faturaKey],
+  );
+
+  return Number(rows[0]?.total ?? 0);
+}
+
+async function sumCreditosFaturaCartao(input: {
+  gestaoId: number;
+  contaCartaoId: number;
+  faturaCompetenciaData: string;
+}): Promise<number> {
+  const faturaKey = normalizeFaturaMesKey(input.faturaCompetenciaData);
+
+  const [rows] = await pool.query<Array<RowDataPacket & { total: string | null }>>(
+    `
+      SELECT COALESCE(SUM(l.valor_total), 0) AS total
+      FROM lancamentos l
+      WHERE l.gestao_id = ?
+        AND l.conta_destino_id = ?
+        AND l.tipo IN ('receita', 'transferencia')
+        AND l.status <> 'cancelado'
+        AND l.fatura_competencia_data IS NOT NULL
+        AND DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-01') = ?
+    `,
+    [input.gestaoId, input.contaCartaoId, faturaKey],
+  );
+
+  return Number(rows[0]?.total ?? 0);
+}
+
+export async function getResumoFaturaCartaoConta(input: {
+  gestaoId: number;
+  contaCartaoId: number;
+  referenceDate?: string;
+  /** YYYY-MM-01; quando informado, ignora referenceDate ao escolher a fatura. */
+  faturaCompetenciaData?: string;
+  /**
+   * Quando false, o saldo exibido fica apenas compras − pagamentos na corrente (sem créditos no cartão).
+   * Padrão true, compatível com o resumo da home/dashboard.
+   */
+  aplicarCreditosNoSaldo?: boolean;
+}): Promise<ResumoFaturaCartao | null> {
+  const [contaRows] = await pool.query<
+    Array<RowDataPacket & { id: number; nome: string; fechamento_dia: number | null }>
+  >(
+    `
+      SELECT id, nome, fechamento_dia
+      FROM contas
+      WHERE gestao_id = ? AND id = ? AND tipo = 'cartao_credito' AND ativa = 1
+      LIMIT 1
+    `,
+    [input.gestaoId, input.contaCartaoId],
+  );
+
+  const conta = contaRows[0];
+  if (!conta) {
+    return null;
+  }
+
+  const referenceDate = input.referenceDate ?? new Date().toISOString().slice(0, 10);
+  const fechamentoDia = conta.fechamento_dia ?? 30;
+  const faturaCompetenciaData = input.faturaCompetenciaData
+    ? normalizeFaturaMesKey(input.faturaCompetenciaData)
+    : resolveFaturaCompetenciaAberta(referenceDate, fechamentoDia);
+
+  const usarCreditos = input.aplicarCreditosNoSaldo !== false;
+
+  const [comprasFatura, pagamentosCorrente, creditosNoCartao] = await Promise.all([
+    sumComprasFaturaCartao({
+      gestaoId: input.gestaoId,
+      contaCartaoId: conta.id,
+      faturaCompetenciaData,
+    }),
+    getPagamentosFaturaPorFaturaCompetencia({
+      gestaoId: input.gestaoId,
+      faturaCompetenciaData,
+    }),
+    sumCreditosFaturaCartao({
+      gestaoId: input.gestaoId,
+      contaCartaoId: conta.id,
+      faturaCompetenciaData,
+    }),
+  ]);
+
+  const saldo = computeSaldoFaturaCartao({
+    comprasFatura,
+    pagamentosCorrente,
+    creditosNoCartao: usarCreditos ? creditosNoCartao : 0,
+  });
+
+  return {
+    contaCartaoId: conta.id,
+    nome: conta.nome,
+    faturaCompetenciaData,
+    comprasFatura,
+    pagamentosCorrente,
+    creditosNoCartao,
+    saldoFatura: saldo.saldoFatura,
+    pagamentosConfiaveis: saldo.pagamentosConfiaveis,
+  };
+}
+
+export async function getResumoFaturasCartaoGestao(
+  gestaoId: number,
+  referenceDate?: string,
+): Promise<ResumoFaturasCartaoGestao> {
+  const [cards] = await pool.query<Array<RowDataPacket & { id: number }>>(
+    `
+      SELECT id FROM contas
+      WHERE gestao_id = ? AND tipo = 'cartao_credito' AND ativa = 1
+      ORDER BY criado_em ASC
+    `,
+    [gestaoId],
+  );
+
+  const cartoes: ResumoFaturaCartao[] = [];
+  for (const card of cards) {
+    const resumo = await getResumoFaturaCartaoConta({
+      gestaoId,
+      contaCartaoId: card.id,
+      referenceDate,
+    });
+    if (resumo) {
+      cartoes.push(resumo);
+    }
+  }
+
+  return {
+    cartoes,
+    totalComprasFatura: cartoes.reduce((acc, item) => acc + item.comprasFatura, 0),
+    totalPagamentosCorrente: cartoes.reduce((acc, item) => acc + item.pagamentosCorrente, 0),
+    totalSaldoFatura: cartoes.reduce((acc, item) => acc + item.saldoFatura, 0),
+  };
 }
 
 /** Soma dos pagamentos de fatura do cartão na corrente (já lançados no extrato). */
@@ -4306,6 +4768,7 @@ export async function getSemanaResumoPorDia(input: {
       FROM lancamentos l
       INNER JOIN contas c_orig ON c_orig.id = l.conta_id
       LEFT JOIN contas c_dest ON c_dest.id = l.conta_destino_id
+      LEFT JOIN categorias c ON c.id = l.categoria_id
       WHERE l.gestao_id = ?
         AND l.status <> 'cancelado'
         AND l.competencia_data >= ?

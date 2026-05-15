@@ -2,9 +2,11 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { SignOutButton } from "@/components/auth/sign-out-button";
-import { DashboardAppNav } from "@/components/dashboard/dashboard-app-nav";
+import { DashboardPageHeader } from "@/components/dashboard/dashboard-page-header";
+import { DashboardPageShell } from "@/components/dashboard/dashboard-page-shell";
+import { DashboardStack } from "@/components/dashboard/dashboard-stack";
 import { requireUser } from "@/lib/server/auth";
+import { timeServerAsync } from "@/lib/server/dashboard-server-timing";
 import {
   findFechamentoPeriodo,
   getSemanaMetricas,
@@ -140,26 +142,35 @@ export default async function FechamentoSemanaPage({ searchParams }: SemanaPageP
   const inicioIso = isoDate(segunda);
   const fimIso = isoDate(domingo);
 
-  const contas = await listContas(gestaoAtiva.id);
+  const [
+    contas,
+    metricas,
+    porDia,
+    fechamento,
+    historico,
+    pagamentosFaturaExtrato,
+  ] = await timeServerAsync("dashboard/semana/data", () =>
+    Promise.all([
+      listContas(gestaoAtiva.id),
+      getSemanaMetricas({ gestaoId: gestaoAtiva.id, inicio: inicioIso, fim: fimIso }),
+      getSemanaResumoPorDia({ gestaoId: gestaoAtiva.id, inicio: inicioIso, fim: fimIso }),
+      findFechamentoPeriodo({ gestaoId: gestaoAtiva.id, tipo: "semanal", inicio: inicioIso }),
+      listFechamentosPeriodo({ gestaoId: gestaoAtiva.id, tipo: "semanal", limit: 26 }),
+      getSemanaPagamentosFatura({ gestaoId: gestaoAtiva.id, inicio: inicioIso, fim: fimIso }),
+    ]),
+  );
+
   const contasCorrentes = contas.filter((c) =>
     ["corrente", "carteira", "caixa", "outro"].includes(c.tipo),
   );
   const contasReserva = contas.filter((c) => c.tipo === "poupanca" || c.tipo === "investimento");
   const contaReservaDiaADia =
-    contasReserva.find((c) => c.nome.toLowerCase().includes("dia a dia"))
-    ?? contasReserva.find((c) => c.nome.toLowerCase().includes("dia"))
-    ?? contasReserva[0]
-    ?? null;
+    contasReserva.find((c) => c.nome.toLowerCase().includes("dia a dia")) ??
+    contasReserva.find((c) => c.nome.toLowerCase().includes("dia")) ??
+    contasReserva[0] ??
+    null;
   const contaOrigemPadrao = contasCorrentes[0] ?? null;
   const nomeReservaDiaADia = contaReservaDiaADia?.nome ?? "reserva do dia a dia";
-
-  const [metricas, porDia, fechamento, historico, pagamentosFaturaExtrato] = await Promise.all([
-    getSemanaMetricas({ gestaoId: gestaoAtiva.id, inicio: inicioIso, fim: fimIso }),
-    getSemanaResumoPorDia({ gestaoId: gestaoAtiva.id, inicio: inicioIso, fim: fimIso }),
-    findFechamentoPeriodo({ gestaoId: gestaoAtiva.id, tipo: "semanal", inicio: inicioIso }),
-    listFechamentosPeriodo({ gestaoId: gestaoAtiva.id, tipo: "semanal", limit: 26 }),
-    getSemanaPagamentosFatura({ gestaoId: gestaoAtiva.id, inicio: inicioIso, fim: fimIso }),
-  ]);
 
   const percentualReserva = Number(gestaoAtiva.percentual_reserva ?? 10);
 
@@ -202,38 +213,31 @@ export default async function FechamentoSemanaPage({ searchParams }: SemanaPageP
   const mapaPorDia = new Map(porDia.map((row) => [row.data, row]));
 
   return (
-    <main className="min-h-screen bg-background px-3 py-3 sm:px-6 sm:py-6 lg:px-10 lg:py-10">
-      <div className="mx-auto max-w-5xl space-y-4">
-        <header className="rounded-[1.4rem] border border-line bg-surface p-4 sm:p-6">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[11px] tracking-[0.18em] text-muted uppercase">Fechamento semanal</p>
-              <h1 className="mt-2 font-heading text-2xl font-semibold leading-tight sm:text-3xl">
-                Semana de {formatRange(inicioIso, fimIso)}
-              </h1>
-              <p className="mt-1.5 text-sm text-muted">
-                {fechada ? (
-                  <span className="inline-flex items-center gap-2">
-                    <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-                    Fechada em {new Date(fechamento.fechado_em).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })} por {fechamento.fechado_por_nome ?? "—"}
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-2">
-                    <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
-                    Em aberto
-                  </span>
-                )}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <DashboardAppNav active="semana" gestaoId={gestaoAtiva.id} />
-              </div>
-              <SignOutButton />
-            </div>
-          </div>
-
-          <div className="mt-4 flex flex-wrap items-center gap-2">
+    <DashboardPageShell>
+      <DashboardPageHeader
+        active="semana"
+        gestaoId={gestaoAtiva.id}
+        kicker="Fechamento semanal"
+        subtitle={
+          fechada ? (
+            <span className="inline-flex items-center gap-2">
+              <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+              Fechada em{" "}
+              {new Date(fechamento.fechado_em).toLocaleString("pt-BR", {
+                timeZone: "America/Sao_Paulo",
+              })}{" "}
+              por {fechamento.fechado_por_nome ?? "—"}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-2">
+              <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
+              Em aberto
+            </span>
+          )
+        }
+        title={`Semana de ${formatRange(inicioIso, fimIso)}`}
+        below={
+          <div className="flex flex-wrap items-center gap-2">
             <Link
               className="rounded-full border border-line bg-background px-3 py-2 text-sm"
               href={`/dashboard/semana?gestao=${gestaoAtiva.id}&inicio=${isoDate(semanaAnterior)}`}
@@ -253,8 +257,10 @@ export default async function FechamentoSemanaPage({ searchParams }: SemanaPageP
               Próxima semana →
             </Link>
           </div>
-        </header>
+        }
+      />
 
+      <DashboardStack>
         {status === "semana-fechada" ? (
           <div className="rounded-[1rem] border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-900 dark:text-emerald-100">
             Semana fechada com sucesso.
@@ -585,7 +591,7 @@ export default async function FechamentoSemanaPage({ searchParams }: SemanaPageP
             </div>
           )}
         </section>
-      </div>
-    </main>
+      </DashboardStack>
+    </DashboardPageShell>
   );
 }
