@@ -506,16 +506,131 @@ function normalizeText(value: string) {
 }
 
 function cleanLancamentoDescricao(value: string) {
+  const parenthesized = value.match(/\(([^)]+)\)/)?.[1]?.trim();
   const cleaned = value
-    .replace(
-      /^\s*(?:compra|pagamento|paguei)\s+(?:no|na|com)?\s*(?:d[eé]bito|debito|cr[eé]dito|credito|pix|cart[aã]o)\s*[-:–—]?\s*/i,
-      "",
-    )
-    .replace(/^\s*(?:d[eé]bito|debito|cr[eé]dito|credito|pix)\s*[-:–—]?\s*/i, "")
+    .replace(/\(([^)]+)\)/g, " ")
+    .replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, " ")
+    .replace(/\b(?:as|às)?\s*([01]?\d|2[0-3])[:h]([0-5]\d)\b/gi, " ")
+    .replace(/\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|\d+(?:[.,]\d{1,2})?/g, " ")
+    .replace(/r\$/gi, " ")
+    .replace(/\b(hoje|agora|ontem|amanha)\b/gi, " ")
+    .replace(/\b(no|na)?\s*dia\b/gi, " ")
+    .replace(/\bpix\s+(enviado|mandado|recebido)\b/gi, " ")
+    .replace(/\b(enviei|envio|mandei|mande|passei|recebi)\s+(um\s+)?pix\b/gi, " ")
+    .replace(/\bcompr\s+a?no\b/gi, " ")
+    .replace(/\b(compra|comprei|compr|pagamento|paguei)\b/gi, " ")
+    .replace(/\b(no|na|com)?\s*cart[aã]o(?:\s+de)?(?:\s+(?:cr[eé]dito|credito|crito))?\b/gi, " ")
+    .replace(/\b(d[eé]bito|debito|cr[eé]dito|credito|crito|pix)\b/gi, " ")
+    .replace(/\b(no|na|de|do|da|para)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
 
-  return cleaned || value.trim();
+  const withContext = [parenthesized, cleaned].filter(Boolean).join(" ").trim();
+
+  return withContext ? prettifyLancamentoDescricao(withContext) : value.trim();
+}
+
+function prettifyLancamentoDescricao(value: string) {
+  const corrections = new Map<string, string>([
+    ["alimentacao", "Alimentação"],
+    ["cartao", "Cartão"],
+    ["credito", "Crédito"],
+    ["debito", "Débito"],
+    ["saude", "Saúde"],
+    ["onibus", "Ônibus"],
+    ["mes", "Mês"],
+    ["mesada", "Mesada"],
+  ]);
+  const smallWords = new Set(["de", "da", "do", "das", "dos", "e", "em", "no", "na"]);
+
+  return value
+    .replace(/[()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean)
+    .map((word, index) => {
+      const normalized = normalizeText(word.replace(/[^\p{L}\p{N}]/gu, ""));
+      const punctuationPrefix = word.match(/^[^\p{L}\p{N}]*/u)?.[0] ?? "";
+      const punctuationSuffix = word.match(/[^\p{L}\p{N}]*$/u)?.[0] ?? "";
+      const core = word.slice(punctuationPrefix.length, word.length - punctuationSuffix.length);
+
+      if (!core) {
+        return word;
+      }
+
+      const corrected = corrections.get(normalized);
+      if (corrected) {
+        return `${punctuationPrefix}${corrected}${punctuationSuffix}`;
+      }
+
+      if (index > 0 && smallWords.has(normalized)) {
+        return `${punctuationPrefix}${normalized}${punctuationSuffix}`;
+      }
+
+      const lower = core.toLocaleLowerCase("pt-BR");
+      return `${punctuationPrefix}${lower.charAt(0).toLocaleUpperCase("pt-BR")}${lower.slice(1)}${punctuationSuffix}`;
+    })
+    .join(" ");
+}
+
+function isGenericPaymentDescription(value: string) {
+  const normalized = normalizeText(value).replace(/\s+/g, " ").trim();
+
+  return (
+    !normalized ||
+    /^(compra|compr|pagamento|paguei)?\s*(no|na|com)?\s*(cartao|cartao de credito|credito|crito|debito|pix)?$/.test(
+      normalized,
+    )
+  );
+}
+
+function detectMeioFromText(value: string): LancamentoMeio | undefined {
+  const normalized = normalizeText(value);
+
+  if (/\bpix\b/.test(normalized) || /\bpics?\b/.test(normalized)) {
+    return "pix";
+  }
+
+  if (/\bdebito\b/.test(normalized)) {
+    return "debito";
+  }
+
+  if (/\bcartao\b/.test(normalized) || /\bcredi(?:to|t|to)?\b/.test(normalized) || /\bcrito\b/.test(normalized)) {
+    return "credito";
+  }
+
+  if (/\b(dinheiro|especie)\b/.test(normalized)) {
+    return "dinheiro";
+  }
+
+  if (/\b(ted|doc)\b/.test(normalized)) {
+    return "ted_doc";
+  }
+
+  if (/\btransferencia\b/.test(normalized)) {
+    return "transferencia";
+  }
+
+  return undefined;
+}
+
+function detectTipoFromText(value: string): "receita" | "despesa" | undefined {
+  const normalized = normalizeText(value);
+
+  if (/\bpix\s+(enviado|mandado)\b/.test(normalized) || /\b(enviei|envio|mandei|mande|passei)\s+(um\s+)?pix\b/.test(normalized)) {
+    return "despesa";
+  }
+
+  if (/\bpix\s+recebido\b/.test(normalized) || /\b(recebi|recebimento|ganhei|entrada|deposito)\b/.test(normalized)) {
+    return "receita";
+  }
+
+  if (/\b(despesa|gastei|paguei|compra|saida)\b/.test(normalized)) {
+    return "despesa";
+  }
+
+  return undefined;
 }
 
 function inferExpenseCategoryName(referenceText: string) {
@@ -529,6 +644,10 @@ function inferExpenseCategoryName(referenceText: string) {
 
   if (/\b(super\s*mercado|supermercado|mercado|feira|padaria|restaurante|ifood|conveniencia)\b/.test(referenceText)) {
     return "Alimentacao";
+  }
+
+  if (/\b(mesada|filho|filha|filhos|crianca)\b/.test(referenceText)) {
+    return "Filhos";
   }
 
   return null;
@@ -643,9 +762,21 @@ async function normalizeCreateLancamentoArgs(
   const currentCategoria = categorias.find((categoria) => categoria.id === categoriaId);
   const referenceText = normalizeText(`${userPrompt ?? ""} ${String(args.descricao ?? "")}`);
   const next = { ...args };
+  const detectedMeio = userPrompt ? detectMeioFromText(userPrompt) : undefined;
+  const detectedTipo = userPrompt ? detectTipoFromText(userPrompt) : undefined;
+  const resolvedTipo = detectedTipo ?? tipo;
 
-  if (tipo === "despesa" && meio === "credito" && currentConta?.tipo !== "cartao_credito") {
-    const wantsLucas = currentConta ? /\blucas\b/.test(normalizeText(currentConta.nome)) : false;
+  if (detectedMeio) {
+    next.meio = detectedMeio;
+  }
+
+  if (detectedTipo) {
+    next.tipo = detectedTipo;
+  }
+
+  if (resolvedTipo === "despesa" && (detectedMeio ?? meio) === "credito" && currentConta?.tipo !== "cartao_credito") {
+    const wantsLucas =
+      /\blucas\b/.test(referenceText) || (currentConta ? /\blucas\b/.test(normalizeText(currentConta.nome)) : false);
     const card =
       contas.find((conta) => conta.tipo === "cartao_credito" && (!wantsLucas || /\blucas\b/.test(normalizeText(conta.nome)))) ??
       contas.find((conta) => conta.tipo === "cartao_credito");
@@ -656,7 +787,7 @@ async function normalizeCreateLancamentoArgs(
   }
 
   if (
-    tipo === "despesa" &&
+    resolvedTipo === "despesa" &&
     meio &&
     meio !== "credito" &&
     meio !== "transferencia" &&
@@ -681,7 +812,7 @@ async function normalizeCreateLancamentoArgs(
     }
   }
 
-  if (!currentConta && (tipo === "receita" || tipo === "despesa")) {
+  if (!currentConta && (resolvedTipo === "receita" || resolvedTipo === "despesa")) {
     const wantsLucas = /\blucas\b/.test(referenceText);
     const defaultConta =
       contas.find(
@@ -702,22 +833,27 @@ async function normalizeCreateLancamentoArgs(
   }
 
   const categoryNatureInvalid =
-    tipo === "receita"
+    resolvedTipo === "receita"
       ? currentCategoria?.natureza === "despesa"
-      : tipo === "despesa"
+      : resolvedTipo === "despesa"
         ? currentCategoria?.natureza === "receita"
         : false;
 
-  if (tipo) {
-    const inferredCategoryName = tipo === "receita" ? "Renda" : inferExpenseCategoryName(referenceText);
+  if (resolvedTipo) {
+    const inferredCategoryName = resolvedTipo === "receita" ? "Renda" : inferExpenseCategoryName(referenceText);
     const desired = inferredCategoryName
       ? categorias.find(
           (categoria) =>
             normalizeText(categoria.nome) === normalizeText(inferredCategoryName) &&
-            (categoria.natureza === tipo || categoria.natureza === "ambos"),
+            (categoria.natureza === resolvedTipo || categoria.natureza === "ambos"),
         )
       : undefined;
-    const fallback = categorias.find((categoria) => categoria.natureza === tipo || categoria.natureza === "ambos");
+    const fallback =
+      categorias.find(
+        (categoria) =>
+          normalizeText(categoria.nome) === "outros" &&
+          (categoria.natureza === resolvedTipo || categoria.natureza === "ambos"),
+      ) ?? categorias.find((categoria) => categoria.natureza === resolvedTipo || categoria.natureza === "ambos");
 
     if (desired && currentCategoria?.id !== desired.id) {
       next.categoriaId = desired.id;
@@ -828,7 +964,12 @@ async function executeTool(
         const confirmar = Boolean(args.confirmar) && isExplicitMutationConfirmation(userPrompt);
         const hoje = new Date().toISOString().slice(0, 10);
 
-        const descricao = cleanLancamentoDescricao(typeof args.descricao === "string" ? args.descricao : "");
+        const rawDescricao = typeof args.descricao === "string" ? args.descricao : "";
+        const descricaoFromPrompt =
+          userPrompt && isGenericPaymentDescription(rawDescricao)
+            ? cleanLancamentoDescricao(userPrompt)
+            : null;
+        const descricao = descricaoFromPrompt ?? cleanLancamentoDescricao(rawDescricao);
         const valor = typeof args.valor === "number" ? args.valor : Number(args.valor);
         const tipo = args.tipo === "receita" || args.tipo === "despesa" ? args.tipo : null;
         const contaId = typeof args.contaId === "number" ? args.contaId : NaN;

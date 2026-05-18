@@ -13,7 +13,8 @@ Hub do repositório de documentação. A base **produto + arquitetura + dados + 
 4. **IA operacional (copiloto):** [`assistente-ia.md`](./assistente-ia.md), [`catalogo-comandos-ia.md`](./catalogo-comandos-ia.md)
 5. **Handoff / cloud:** [`briefing-modelagem-cloud.md`](./briefing-modelagem-cloud.md)
 6. **Deploy (referência):** [`deploy-railway.md`](./deploy-railway.md)
-7. **Artefatos de exemplo:** [`extratos/`](./extratos/)
+7. **Diário de desenvolvimento:** [`diario-desenvolvimento.md`](./diario-desenvolvimento.md)
+8. **Artefatos de exemplo:** [`extratos/`](./extratos/)
 
 ## Árvore de alto nível
 
@@ -29,6 +30,7 @@ docs/
 ├── catalogo-comandos-ia.md
 ├── briefing-modelagem-cloud.md
 ├── deploy-railway.md
+├── diario-desenvolvimento.md
 ├── extratos/
 └── modelagem/                   ← TUDO da base estrutural (centralizado)
     ├── README.md

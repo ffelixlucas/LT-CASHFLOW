@@ -83,11 +83,13 @@ export async function fecharSemanaAction(formData: FormData) {
     [observacoesBase, detalhesReserva ? `Reservas: ${detalhesReserva}` : ""]
       .filter(Boolean)
       .join(" — ") || null;
-  const pagamentoFaturaRaw = formData.get("pagamentoFatura");
   const apenasSnapshot = formData.get("apenasSnapshot") === "on";
   const transferencias = parseTransferencias(formData.get("transferenciasReserva"));
   const reservasPorConta = parseReservasPorConta(formData.get("reservasPorConta"));
   const reservarValorTotal = Math.max(0, Number(formData.get("reservarValorTotal") ?? 0));
+  const comprasCartaoRegistro = Math.max(0, Number(formData.get("comprasCartaoRegistro") ?? 0));
+  const pagamentoFatura = Math.max(0, Number(formData.get("pagamentoFatura") ?? 0));
+  const contaCorrenteId = Number(formData.get("contaCorrenteId") ?? 0);
 
   if (!gestaoId || !inicio || !fim) {
     redirect("/dashboard?status=fechamento-invalido");
@@ -98,6 +100,8 @@ export async function fecharSemanaAction(formData: FormData) {
   }
 
   const metricas = await getSemanaMetricas({ gestaoId, inicio, fim });
+  const comprasCartao =
+    comprasCartaoRegistro > 0.004 ? comprasCartaoRegistro : metricas.comprasCartao;
 
   const somaTransferencias = transferencias.reduce((acc, tr) => acc + tr.valor, 0);
   const reservarValor =
@@ -106,9 +110,9 @@ export async function fecharSemanaAction(formData: FormData) {
       : somaTransferencias > 0
         ? somaTransferencias
         : reservasPorConta.reduce((acc, r) => acc + r.valor, 0);
-  const pagamentoFatura = Math.max(0, Number(pagamentoFaturaRaw ?? 0));
+
   const restoFim =
-    metricas.entradas - metricas.saidasCorrente - metricas.comprasCartao - reservarValor;
+    metricas.entradas - metricas.saidasCorrente - comprasCartao - reservarValor;
   const ajusteDiaADiaTipo =
     Math.abs(restoFim) < 0.005 ? "nenhum" : restoFim > 0 ? "aporte" : "resgate";
   const ajusteDiaADiaValor = Math.round(Math.abs(restoFim) * 100) / 100;
@@ -120,9 +124,10 @@ export async function fecharSemanaAction(formData: FormData) {
     fim,
     entradas: metricas.entradas,
     saidasCorrente: metricas.saidasCorrente,
-    comprasCartao: metricas.comprasCartao,
+    comprasCartao,
     reservadoNoFechamento: reservarValor,
     pagamentoFatura,
+    contaCorrenteId,
     ajusteDiaADiaTipo,
     ajusteDiaADiaValor,
     apenasSnapshot,
@@ -134,6 +139,7 @@ export async function fecharSemanaAction(formData: FormData) {
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/semana");
   revalidatePath("/dashboard/reservas");
+  revalidatePath("/dashboard/movimentacoes");
 
   redirect(semanaUrl({ gestaoId, inicio, status: "semana-fechada" }));
 }

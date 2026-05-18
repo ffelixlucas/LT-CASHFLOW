@@ -13,6 +13,7 @@ type FecharSemanaFormProps = {
   entradasSemana: number;
   saidasCorrenteSemana: number;
   comprasCartaoSemana: number;
+  pagamentoFaturaSugerido: number;
   reservasDisponiveis: ContaSelecionavel[];
   contasCorrente: ContaSelecionavel[];
   contaOrigemPadraoId: number | null;
@@ -33,6 +34,17 @@ function parseNumber(raw: string) {
   return Number.isFinite(n) ? Math.max(0, n) : 0;
 }
 
+function StepHeader({ n, title }: { n: number; title: string }) {
+  return (
+    <div className="flex items-baseline gap-3">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-sm font-semibold text-white">
+        {n}
+      </span>
+      <h3 className="font-heading text-base font-semibold">{title}</h3>
+    </div>
+  );
+}
+
 export function FecharSemanaForm({
   gestaoId,
   inicio,
@@ -40,80 +52,90 @@ export function FecharSemanaForm({
   entradasSemana,
   saidasCorrenteSemana,
   comprasCartaoSemana,
+  pagamentoFaturaSugerido,
   reservasDisponiveis,
   contasCorrente,
   contaOrigemPadraoId,
   action,
 }: FecharSemanaFormProps) {
-  const [cartaoStr, setCartaoStr] = useState<string>(comprasCartaoSemana.toFixed(2));
+  const [cartaoStr, setCartaoStr] = useState(comprasCartaoSemana.toFixed(2));
+  const [faturaStr, setFaturaStr] = useState(
+    pagamentoFaturaSugerido > 0 ? pagamentoFaturaSugerido.toFixed(2) : "",
+  );
   const [reservas, setReservas] = useState<Record<number, string>>(() =>
     Object.fromEntries(reservasDisponiveis.map((c) => [c.id, "0.00"])),
   );
   const [apenasSnapshot, setApenasSnapshot] = useState(false);
-  const [contaOrigemId, setContaOrigemId] = useState<number>(() => {
-    const first = contasCorrente[0]?.id ?? 0;
-    return contaOrigemPadraoId ?? first;
-  });
+  const [contaOrigemId, setContaOrigemId] = useState(() => contaOrigemPadraoId ?? contasCorrente[0]?.id ?? 0);
 
   const cartao = parseNumber(cartaoStr);
+  const pagamentoFatura = parseNumber(faturaStr);
   const reservasArr = reservasDisponiveis.map((c) => ({ ...c, valor: parseNumber(reservas[c.id] ?? "0") }));
   const totalReserva = reservasArr.reduce((acc, r) => acc + r.valor, 0);
   const contasReservaPreenchidas = reservasArr.filter((r) => r.valor > 0);
 
-  /** Sobra que precisa ser distribuída nas reservas para a semana fechar zerada. */
-  const sobraSemReservas = entradasSemana - saidasCorrenteSemana - cartao;
-  const restoAposReservas = sobraSemReservas - totalReserva;
+  const sobraOperacional = entradasSemana - saidasCorrenteSemana - cartao;
+  const sobraEmCaixa = sobraOperacional - pagamentoFatura - totalReserva;
   const sobraTipo =
-    Math.abs(restoAposReservas) < 0.005 ? "zerada" : restoAposReservas > 0 ? "aporte" : "resgate";
-  const sobraAbs = Math.round(Math.abs(restoAposReservas) * 100) / 100;
+    Math.abs(sobraEmCaixa) < 0.005 ? "zerada" : sobraEmCaixa > 0 ? "aporte" : "resgate";
+  const sobraAbs = Math.round(Math.abs(sobraEmCaixa) * 100) / 100;
 
   const detalhesReserva = contasReservaPreenchidas
     .map((r) => `${r.nome}: ${moedaBR(r.valor)}`)
     .join("; ");
 
-  const transferenciasJson = JSON.stringify(
-    contasReservaPreenchidas.map((r) => ({
-      contaOrigemId: contaOrigemId,
-      contaDestinoId: r.id,
-      valor: r.valor,
-    })),
-  );
+  const sobraBoxClass =
+    sobraTipo === "zerada"
+      ? "border-emerald-500/40 bg-emerald-500/10"
+      : sobraTipo === "aporte"
+        ? "border-amber-500/40 bg-amber-500/10"
+        : "border-rose-500/40 bg-rose-500/10";
 
-  const reservasPorContaJson = JSON.stringify(
-    contasReservaPreenchidas.map((r) => ({
-      contaId: r.id,
-      nome: r.nome,
-      valor: Math.round(r.valor * 100) / 100,
-    })),
-  );
-
-  function handleReservaChange(id: number, raw: string) {
-    setReservas((prev) => ({ ...prev, [id]: raw }));
-  }
+  const conferenciaClass =
+    sobraTipo === "zerada"
+      ? "border-emerald-500/40 bg-emerald-500/5"
+      : sobraTipo === "aporte"
+        ? "border-amber-500/40 bg-amber-500/5"
+        : "border-rose-500/40 bg-rose-500/5";
 
   return (
     <form action={action} className="mt-5 space-y-4">
       <input type="hidden" name="gestaoId" value={gestaoId} />
       <input type="hidden" name="inicio" value={inicio} />
       <input type="hidden" name="fim" value={fim} />
-      <input type="hidden" name="pagamentoFatura" value={cartao.toFixed(2)} />
+      <input type="hidden" name="comprasCartaoRegistro" value={cartao.toFixed(2)} />
+      <input type="hidden" name="contaCorrenteId" value={contaOrigemId || ""} />
       <input type="hidden" name="reservarValorTotal" value={totalReserva.toFixed(2)} />
       <input type="hidden" name="apenasSnapshot" value={apenasSnapshot ? "on" : ""} />
-      <input type="hidden" name="transferenciasReserva" value={transferenciasJson} />
-      <input type="hidden" name="reservasPorConta" value={reservasPorContaJson} />
+      <input
+        type="hidden"
+        name="transferenciasReserva"
+        value={JSON.stringify(
+          contasReservaPreenchidas.map((r) => ({
+            contaOrigemId,
+            contaDestinoId: r.id,
+            valor: r.valor,
+          })),
+        )}
+      />
+      <input
+        type="hidden"
+        name="reservasPorConta"
+        value={JSON.stringify(
+          contasReservaPreenchidas.map((r) => ({
+            contaId: r.id,
+            nome: r.nome,
+            valor: Math.round(r.valor * 100) / 100,
+          })),
+        )}
+      />
       <input type="hidden" name="detalhesReserva" value={detalhesReserva} />
 
       <article className="rounded-[1.2rem] border border-line bg-background/60 p-4">
-        <div className="flex items-baseline gap-3">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-sm font-semibold text-white">
-            1
-          </span>
-          <h3 className="font-heading text-base font-semibold">Cartão — gasto da semana</h3>
-        </div>
+        <StepHeader n={1} title="Cartão — gasto da semana" />
         <p className="mt-2 text-sm text-muted leading-relaxed">
-          Compras no cartão com data nesta semana — mesmo valor de <strong className="text-foreground">Saídas no
-          crédito</strong> na leitura rápida. Pagamento de fatura no extrato não entra aqui (é fechamento de outra
-          semana).
+          Compras no cartão com data nesta semana (registro no snapshot). Não é o pagamento da fatura na
+          corrente.
         </p>
         <label className="mt-3 block max-w-xs">
           <span className="block text-xs uppercase tracking-[0.18em] text-muted">Gasto no cartão (registro)</span>
@@ -130,37 +152,48 @@ export function FecharSemanaForm({
       </article>
 
       <article className="rounded-[1.2rem] border border-line bg-background/60 p-4">
-        <div className="flex items-baseline gap-3">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-sm font-semibold text-white">
-            2
-          </span>
-          <h3 className="font-heading text-base font-semibold">Reservas — quanto guardou em cada</h3>
-        </div>
+        <StepHeader n={2} title="Fatura — pagamento na corrente" />
         <p className="mt-2 text-sm text-muted leading-relaxed">
-          Sobrou na corrente depois do gasto da semana (entradas − débito − cartão). Distribua nas reservas até zerar.
-          Deixe em <strong>0</strong> as que não usou.
+          Quanto <strong className="text-foreground">saiu da corrente</strong> para pagar a fatura neste
+          fechamento. O LT cria o lançamento no extrato (atualiza a{" "}
+          <strong className="text-foreground">Liquidez</strong>).
+        </p>
+        <label className="mt-3 block max-w-xs">
+          <span className="block text-xs uppercase tracking-[0.18em] text-muted">Pagamento de fatura</span>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            name="pagamentoFatura"
+            autoComplete="off"
+            value={faturaStr}
+            onChange={(e) => setFaturaStr(e.target.value)}
+            placeholder="0,00"
+            className="mt-1 w-full rounded-2xl border border-line bg-background px-4 py-3 text-sm outline-none transition focus:border-foreground"
+          />
+        </label>
+        {pagamentoFaturaSugerido > 0 ? (
+          <p className="mt-2 text-xs text-muted">
+            Sugestão do extrato nesta semana: {moedaBR(pagamentoFaturaSugerido)} (ajuste se pagou outro valor).
+          </p>
+        ) : null}
+      </article>
+
+      <article className="rounded-[1.2rem] border border-line bg-background/60 p-4">
+        <StepHeader n={3} title="Reservas — quanto guardou em cada" />
+        <p className="mt-2 text-sm text-muted leading-relaxed">
+          Aplicações da corrente para poupança neste fechamento. O LT registra uma transferência por reserva
+          com valor maior que zero.
         </p>
 
-        <div
-          className={`mt-3 rounded-[1rem] border px-4 py-3 ${
-            sobraTipo === "zerada"
-              ? "border-emerald-500/40 bg-emerald-500/10"
-              : sobraTipo === "aporte"
-                ? "border-amber-500/40 bg-amber-500/10"
-                : "border-rose-500/40 bg-rose-500/10"
-          }`}
-        >
-          <p className="text-xs uppercase tracking-[0.18em] text-muted">
-            {sobraTipo === "resgate" ? "Faltou para fechar" : "Falta zerar nesta semana"}
-          </p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums">
-            {sobraTipo === "resgate" ? `− ${moedaBR(sobraAbs)}` : moedaBR(sobraAbs)}
-          </p>
-          <p className="mt-1 text-xs text-muted leading-relaxed">
-            Começou em <strong>{moedaBR(sobraSemReservas)}</strong> (entradas {moedaBR(entradasSemana)} − débito{" "}
-            {moedaBR(saidasCorrenteSemana)} − cartão {moedaBR(cartao)}) e diminui conforme você preenche cada reserva.
-          </p>
-        </div>
+        <SobraEmCaixaBox
+          sobraTipo={sobraTipo}
+          sobraAbs={sobraAbs}
+          sobraOperacional={sobraOperacional}
+          pagamentoFatura={pagamentoFatura}
+          totalReserva={totalReserva}
+          className={sobraBoxClass}
+        />
 
         {reservasDisponiveis.length === 0 ? (
           <p className="mt-3 text-sm text-rose-700">
@@ -177,7 +210,9 @@ export function FecharSemanaForm({
                   min="0"
                   autoComplete="off"
                   value={reservas[conta.id] ?? "0"}
-                  onChange={(e) => handleReservaChange(conta.id, e.target.value)}
+                  onChange={(e) =>
+                    setReservas((prev) => ({ ...prev, [conta.id]: e.target.value }))
+                  }
                   className="w-32 rounded-2xl border border-line bg-background px-3 py-2 text-sm outline-none focus:border-foreground"
                 />
               </label>
@@ -207,34 +242,29 @@ export function FecharSemanaForm({
         ) : null}
       </article>
 
-      <article
-        className={`rounded-[1.2rem] border p-4 ${
-          sobraTipo === "zerada"
-            ? "border-emerald-500/40 bg-emerald-500/5"
-            : sobraTipo === "aporte"
-              ? "border-amber-500/40 bg-amber-500/5"
-              : "border-rose-500/40 bg-rose-500/5"
-        }`}
-      >
-        <p className="text-xs uppercase tracking-[0.18em] text-muted">Conferência</p>
+      <article className={`rounded-[1.2rem] border p-4 ${conferenciaClass}`}>
+        <p className="text-xs uppercase tracking-[0.18em] text-muted">Conferência em caixa</p>
         <p className="mt-1 text-base leading-relaxed">
           {sobraTipo === "zerada" ? (
-            <>A semana <strong className="text-emerald-700">fecha zerada</strong>. Pode prosseguir.</>
+            <>
+              Corrente <strong className="text-emerald-700">fecha zerada</strong> com fatura + reservas
+              informadas. Pode prosseguir.
+            </>
           ) : sobraTipo === "aporte" ? (
             <>
-              Ainda restam <strong className="text-amber-800">{moedaBR(sobraAbs)}</strong> desta semana — distribua
-              esse valor nas reservas para zerar.
+              Ainda sobrariam <strong className="text-amber-800">{moedaBR(sobraAbs)}</strong> na corrente —
+              ajuste fatura ou reservas, ou prossiga se for intencional.
             </>
           ) : (
             <>
-              Está <strong className="text-rose-700">{moedaBR(sobraAbs)}</strong> negativo na corrente. Reduza valor
-              em alguma reserva, ou registre um resgate de uma reserva no seu banco antes de fechar.
+              Faltam <strong className="text-rose-700">{moedaBR(sobraAbs)}</strong> na corrente para bater com
+              o que você moveu no banco. Revise fatura e reservas.
             </>
           )}
         </p>
         <p className="mt-2 text-xs text-muted leading-relaxed">
-          Cálculo: Entradas ({moedaBR(entradasSemana)}) − Débito/Pix ({moedaBR(saidasCorrenteSemana)}) − Cartão (
-          {moedaBR(cartao)}) − Reservas ({moedaBR(totalReserva)}) = {moedaBR(restoAposReservas)}.
+          Resultado da semana {moedaBR(sobraOperacional)} − fatura {moedaBR(pagamentoFatura)} − reservas{" "}
+          {moedaBR(totalReserva)} = {moedaBR(sobraEmCaixa)} na corrente.
         </p>
       </article>
 
@@ -246,8 +276,8 @@ export function FecharSemanaForm({
           className="mt-1 h-4 w-4 shrink-0 rounded border-line"
         />
         <span className="text-sm leading-snug">
-          <strong className="text-foreground">Já fiz tudo no banco</strong> — só registra o fechamento aqui, sem criar
-          transferência. Use quando cartão, reserva e zeragem já apareceram no extrato.
+          <strong className="text-foreground">Já fiz tudo no banco antes</strong> — marca que o Pix já saiu no
+          Inter; o LT ainda registra fatura e reservas aqui para o extrato e a Liquidez ficarem corretos.
         </span>
       </label>
 
@@ -256,7 +286,7 @@ export function FecharSemanaForm({
         <textarea
           name="observacoes"
           rows={2}
-          placeholder="ex.: paguei a fatura em parcelas; guardei em outra reserva..."
+          placeholder="ex.: paguei a fatura em um único Pix; guardei 10% na objetivo..."
           className="mt-2 w-full rounded-2xl border border-line bg-background px-4 py-3 text-sm outline-none focus:border-foreground"
         />
       </label>
@@ -269,10 +299,41 @@ export function FecharSemanaForm({
           Fechar semana
         </button>
         <p className="text-xs text-muted max-w-md">
-          Confirma cartão, reservas e zeragem desta semana. Se não marcou “Já fiz tudo no banco”, cria{" "}
-          <strong>uma transferência por reserva</strong> com valor maior que zero (corrente → reserva selecionada).
+          Grava o snapshot e registra no extrato: pagamento de fatura (se informado) e uma transferência por
+          reserva preenchida.
         </p>
       </div>
     </form>
+  );
+}
+
+function SobraEmCaixaBox({
+  sobraTipo,
+  sobraAbs,
+  sobraOperacional,
+  pagamentoFatura,
+  totalReserva,
+  className,
+}: {
+  sobraTipo: "zerada" | "aporte" | "resgate";
+  sobraAbs: number;
+  sobraOperacional: number;
+  pagamentoFatura: number;
+  totalReserva: number;
+  className: string;
+}) {
+  return (
+    <div className={`mt-3 rounded-[1rem] border px-4 py-3 ${className}`}>
+      <p className="text-xs uppercase tracking-[0.18em] text-muted">
+        {sobraTipo === "resgate" ? "Faltou na corrente" : "Sobra em caixa (modelo caderno)"}
+      </p>
+      <p className="mt-1 text-2xl font-semibold tabular-nums">
+        {sobraTipo === "resgate" ? `− ${moedaBR(sobraAbs)}` : moedaBR(sobraAbs)}
+      </p>
+      <p className="mt-1 text-xs text-muted leading-relaxed">
+        Resultado da semana {moedaBR(sobraOperacional)} − fatura {moedaBR(pagamentoFatura)} − reservas{" "}
+        {moedaBR(totalReserva)}.
+      </p>
+    </div>
   );
 }

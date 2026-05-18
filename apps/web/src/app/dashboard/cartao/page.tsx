@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 
 import { normalizeFaturaMesKey, resolveFaturaCompetenciaAberta } from "@ltcashflow/finance-core";
 
+import { CartaoMovimentosList } from "@/app/dashboard/cartao/cartao-movimentos-list";
 import { FaturaMesSelectForm } from "@/app/dashboard/cartao/fatura-mes-select-form";
 import { DashboardPageHeader } from "@/components/dashboard/dashboard-page-header";
 import { DashboardPageShell } from "@/components/dashboard/dashboard-page-shell";
@@ -13,6 +14,7 @@ import { timeServerAsync } from "@/lib/server/dashboard-server-timing";
 import {
   countMovimentosFaturaCartaoConta,
   getResumoFaturaCartaoConta,
+  listCategorias,
   listContas,
   listFaturaMesKeysParaCartaoConta,
   listMovimentosFaturaCartaoConta,
@@ -65,34 +67,6 @@ function parsePositiveInt(raw: string | string[] | undefined, fallback = 1) {
   return Math.floor(parsed);
 }
 
-function formatListaDia(isoDay: string) {
-  const withNoonUtc = `${isoDay}T12:00:00Z`;
-  return new Intl.DateTimeFormat("pt-BR", {
-    weekday: "long",
-    day: "2-digit",
-    month: "long",
-    timeZone: "UTC",
-  }).format(new Date(withNoonUtc));
-}
-
-function agruparMovPorData(movs: MovimentoFaturaCartao[]): [string, MovimentoFaturaCartao[]][] {
-  const map = new Map<string, MovimentoFaturaCartao[]>();
-  for (const m of movs) {
-    const arr = map.get(m.competencia_data) ?? [];
-    arr.push(m);
-    map.set(m.competencia_data, arr);
-  }
-  return [...map.entries()]
-    .map(([dia, lista]) => [
-      dia,
-      [...lista].sort((a, b) => {
-        const horaDiff = (b.competencia_hora ?? "00:00").localeCompare(a.competencia_hora ?? "00:00");
-        return horaDiff || b.id - a.id;
-      }),
-    ] as [string, MovimentoFaturaCartao[]])
-    .sort(([a], [b]) => b.localeCompare(a));
-}
-
 function montarHrefCartao(input: {
   gestaoId: number;
   contaId: number;
@@ -129,7 +103,9 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
   const gestaoAtiva =
     gestoes.find((item) => item.id === requestedGestaoId) ?? gestoes[0] ?? null;
 
-  const contas = gestaoAtiva ? await listContas(gestaoAtiva.id) : [];
+  const [contas, categorias] = gestaoAtiva
+    ? await Promise.all([listContas(gestaoAtiva.id), listCategorias(gestaoAtiva.id)])
+    : [[], []];
   const cartoes = contas.filter((conta) => conta.tipo === "cartao_credito");
 
   const requestedContaId =
@@ -220,8 +196,6 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
   const prevFatura =
     idxFatura >= 0 && idxFatura < faturaMesKeys.length - 1 ? faturaMesKeys[idxFatura + 1] : null;
   const nextFatura = idxFatura > 0 ? faturaMesKeys[idxFatura - 1] : null;
-
-  const grupoMovimentos = agruparMovPorData(movimentos);
 
   const rotuloMesFatura = new Intl.DateTimeFormat("pt-BR", {
     month: "long",
@@ -375,71 +349,42 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
                   {movimentos.length === 0 ? (
                     <p className="muted">Nenhum lançamento nesta fatura.</p>
                   ) : (
-                    <>
-                      <div className="activity-list">
-                        {grupoMovimentos.map(([dia, lista]) => (
-                          <div className="card-statement-day" key={dia}>
-                            <p className="card-statement-date">{formatListaDia(dia)}</p>
-                            <div>
-                              {lista.map((m) => {
-                                const texto =
-                                  (m.descricao && m.descricao.trim()) ||
-                                  `${m.tipo === "compra" ? "Compra" : "Pagamento"} #${m.id}`;
-                                const extra = `${m.categoria_nome}${m.conta_nome ? ` · ${m.conta_nome}` : ""}`;
-                                const ehCompra = m.tipo === "compra";
-
-                                return (
-                                  <div className="activity-row" key={`${m.tipo}-${m.id}`}>
-                                    <div>
-                                      <strong>{texto}</strong>
-                                      {extra.trim() !== "" ? <span>{extra}</span> : null}
-                                    </div>
-                                    <b className={ehCompra ? "bad" : "good"}>
-                                      {ehCompra ? "-" : "+"}
-                                      {money(m.valor_total)}
-                                    </b>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="dashboard-pagination">
-                        <span>
-                          Página {paginaMovimentosSegura} de {totalPaginasMovimentos}
-                        </span>
-                        <div className="period-chips">
-                          {paginaMovimentosSegura > 1 ? (
-                            <Link
-                              className="period-chip"
-                              href={montarHrefCartao({
-                                gestaoId: gestaoAtiva.id,
-                                contaId: contaCartaoAtiva.id,
-                                fatura: faturaSelecionada,
-                                pagina: paginaMovimentosSegura - 1,
-                              })}
-                            >
-                              ← Anterior
-                            </Link>
-                          ) : null}
-                          {paginaMovimentosSegura < totalPaginasMovimentos ? (
-                            <Link
-                              className="period-chip"
-                              href={montarHrefCartao({
-                                gestaoId: gestaoAtiva.id,
-                                contaId: contaCartaoAtiva.id,
-                                fatura: faturaSelecionada,
-                                pagina: paginaMovimentosSegura + 1,
-                              })}
-                            >
-                              Próxima →
-                            </Link>
-                          ) : null}
-                        </div>
-                      </div>
-                    </>
+                    <CartaoMovimentosList
+                      categorias={categorias.map((categoria) => ({
+                        id: categoria.id,
+                        nome: categoria.nome,
+                      }))}
+                      contas={contas.map((conta) => ({
+                        id: conta.id,
+                        nome: conta.nome,
+                        tipo: conta.tipo,
+                      }))}
+                      gestaoId={gestaoAtiva.id}
+                      hrefAnterior={
+                        paginaMovimentosSegura > 1
+                          ? montarHrefCartao({
+                              gestaoId: gestaoAtiva.id,
+                              contaId: contaCartaoAtiva.id,
+                              fatura: faturaSelecionada,
+                              pagina: paginaMovimentosSegura - 1,
+                            })
+                          : undefined
+                      }
+                      hrefProxima={
+                        paginaMovimentosSegura < totalPaginasMovimentos
+                          ? montarHrefCartao({
+                              gestaoId: gestaoAtiva.id,
+                              contaId: contaCartaoAtiva.id,
+                              fatura: faturaSelecionada,
+                              pagina: paginaMovimentosSegura + 1,
+                            })
+                          : undefined
+                      }
+                      movimentos={movimentos}
+                      paginaAtual={paginaMovimentosSegura}
+                      totalMovimentos={totalMovimentos}
+                      totalPaginas={totalPaginasMovimentos}
+                    />
                   )}
                 </section>
               </>

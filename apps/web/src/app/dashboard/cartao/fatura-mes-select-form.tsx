@@ -21,7 +21,7 @@ export function FaturaMesSelectForm({ gestaoId, contaId, valorAtual, opcoes }: P
         Mês da fatura
       </label>
       <select
-        className="h-[42px] w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm font-bold text-white outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-white"
+        className="fatura-month-select h-[42px] w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm font-bold text-white outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-white"
         defaultValue={valorAtual}
         id="fatura-mes-select"
         name="fatura"

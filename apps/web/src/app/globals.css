@@ -503,6 +503,11 @@ a {
   color: var(--foreground);
 }
 
+.fatura-month-select option {
+  background: var(--surface);
+  color: var(--foreground);
+}
+
 .decision-ledger {
   align-self: stretch;
   background: rgba(255, 255, 255, 0.08);
@@ -1073,11 +1078,40 @@ a {
 .signal-row,
 .activity-row {
   align-items: center;
+  background: transparent;
+  border-bottom: 0;
+  border-left: 0;
+  border-right: 0;
   border-top: 1px solid var(--line);
+  color: inherit;
   display: flex;
+  font: inherit;
   gap: 14px;
   justify-content: space-between;
   padding-top: 12px;
+  width: 100%;
+}
+
+.activity-row {
+  cursor: pointer;
+}
+
+.weekly-total-button {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  display: inline;
+  font: inherit;
+  font-weight: inherit;
+  padding: 0;
+  text-align: right;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.weekly-total-button:hover {
+  text-decoration-thickness: 2px;
 }
 
 .signal-row:first-child,

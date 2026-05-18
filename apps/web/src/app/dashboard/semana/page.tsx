@@ -12,12 +12,14 @@ import {
   getSemanaMetricas,
   getSemanaPagamentosFatura,
   getSemanaResumoPorDia,
+  listSemanaConferenciaLancamentos,
   listContas,
   listFechamentosPeriodo,
   listUserGestoes,
 } from "@/lib/server/repository";
 import { fecharSemanaAction } from "./actions";
 import { FecharSemanaForm } from "./fechar-semana-form";
+import { SemanaConferenciaModal } from "./semana-conferencia-modal";
 
 export const metadata: Metadata = {
   title: "Fechamento semanal",
@@ -149,6 +151,7 @@ export default async function FechamentoSemanaPage({ searchParams }: SemanaPageP
     fechamento,
     historico,
     pagamentosFaturaExtrato,
+    conferenciaLancamentos,
   ] = await timeServerAsync("dashboard/semana/data", () =>
     Promise.all([
       listContas(gestaoAtiva.id),
@@ -157,6 +160,7 @@ export default async function FechamentoSemanaPage({ searchParams }: SemanaPageP
       findFechamentoPeriodo({ gestaoId: gestaoAtiva.id, tipo: "semanal", inicio: inicioIso }),
       listFechamentosPeriodo({ gestaoId: gestaoAtiva.id, tipo: "semanal", limit: 26 }),
       getSemanaPagamentosFatura({ gestaoId: gestaoAtiva.id, inicio: inicioIso, fim: fimIso }),
+      listSemanaConferenciaLancamentos({ gestaoId: gestaoAtiva.id, inicio: inicioIso, fim: fimIso }),
     ]),
   );
 
@@ -395,13 +399,41 @@ export default async function FechamentoSemanaPage({ searchParams }: SemanaPageP
                   return (
                     <tr className="border-t border-line bg-background/60 font-medium">
                       <td className="px-2 py-2 text-left">Total semana</td>
-                      <td className="px-2 py-2 text-right text-emerald-700">{money(totalEntradas)}</td>
-                      <td className="px-2 py-2 text-right text-rose-700">{money(totalSaidas)}</td>
-                      <td className="px-2 py-2 text-right text-rose-700">{money(totalCartao)}</td>
-                      <td
-                        className={`px-2 py-2 text-right ${totalLiquido >= 0 ? "text-emerald-700" : "text-rose-700"}`}
-                      >
-                        {money(totalLiquido)}
+                      <td className="px-2 py-2 text-right text-emerald-700">
+                        <SemanaConferenciaModal
+                          buttonClassName="weekly-total-button text-emerald-700"
+                          initialGrupo="entradas"
+                          itens={conferenciaLancamentos}
+                        >
+                          {money(totalEntradas)}
+                        </SemanaConferenciaModal>
+                      </td>
+                      <td className="px-2 py-2 text-right text-rose-700">
+                        <SemanaConferenciaModal
+                          buttonClassName="weekly-total-button text-rose-700"
+                          initialGrupo="debito_pix"
+                          itens={conferenciaLancamentos}
+                        >
+                          {money(totalSaidas)}
+                        </SemanaConferenciaModal>
+                      </td>
+                      <td className="px-2 py-2 text-right text-rose-700">
+                        <SemanaConferenciaModal
+                          buttonClassName="weekly-total-button text-rose-700"
+                          initialGrupo="cartao"
+                          itens={conferenciaLancamentos}
+                        >
+                          {money(totalCartao)}
+                        </SemanaConferenciaModal>
+                      </td>
+                      <td className={`px-2 py-2 text-right ${totalLiquido >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                        <SemanaConferenciaModal
+                          buttonClassName={`weekly-total-button ${totalLiquido >= 0 ? "text-emerald-700" : "text-rose-700"}`}
+                          initialGrupo="todos"
+                          itens={conferenciaLancamentos}
+                        >
+                          {money(totalLiquido)}
+                        </SemanaConferenciaModal>
                       </td>
                     </tr>
                   );
@@ -426,10 +458,9 @@ export default async function FechamentoSemanaPage({ searchParams }: SemanaPageP
           <section className="rounded-[1.4rem] border border-line bg-surface p-4 sm:p-5">
             <h2 className="font-heading text-lg font-semibold">Fechar a semana</h2>
             <p className="mt-2 text-sm text-muted leading-relaxed">
-              Débito e Pix já saíram da corrente durante a semana. Falta <strong>registrar o gasto no cartão</strong> e{" "}
-              <strong>quanto você guardou em cada reserva</strong>. A conferência embaixo mostra se a semana fica
-              zerada — se faltar dinheiro na corrente, esse valor vem de uma das reservas (resgate); se sobrar, aumente
-              o valor guardado para zerar.
+              Preencha <strong>fatura paga na corrente</strong> e <strong>reservas</strong>. Ao fechar, o LT grava o
+              snapshot e cria os lançamentos no extrato (Liquidez atualiza). A conferência usa o modelo do caderno:
+              resultado da semana − fatura − reservas = saldo em caixa.
             </p>
 
             <FecharSemanaForm
@@ -439,6 +470,7 @@ export default async function FechamentoSemanaPage({ searchParams }: SemanaPageP
               entradasSemana={metricasBase.entradas}
               saidasCorrenteSemana={metricasBase.saidasCorrente}
               comprasCartaoSemana={metricasBase.comprasCartao}
+              pagamentoFaturaSugerido={pagamentosFaturaExtrato}
               reservasDisponiveis={contasReserva.map((c) => ({ id: c.id, nome: c.nome }))}
               contasCorrente={contasCorrentes.map((c) => ({ id: c.id, nome: c.nome }))}
               contaOrigemPadraoId={contaOrigemPadrao?.id ?? null}
@@ -451,28 +483,57 @@ export default async function FechamentoSemanaPage({ searchParams }: SemanaPageP
               <h2 className="font-heading text-lg font-semibold">Snapshot do fechamento</h2>
               {Number(fechamento.apenas_snapshot) === 1 ? (
                 <span className="rounded-full border border-amber-500/50 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-900 dark:text-amber-100">
-                  Só registro histórico
+                  Já executado no banco
                 </span>
-              ) : fechamento.lancamento_reserva_id ? (
+              ) : null}
+              {fechamento.lancamento_reserva_id ? (
                 <span className="rounded-full border border-emerald-500/50 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-900 dark:text-emerald-100">
-                  Transferência criada
+                  Movimentos registrados
                 </span>
               ) : null}
             </div>
-            <p className="mt-1 text-sm text-muted">Valores gravados neste fechamento.</p>
+            <p className="mt-1 text-sm text-muted leading-relaxed">
+              Valores gravados neste fechamento. No banco, o campo interno <em>sobra</em> é só{" "}
+              <strong className="text-foreground">entradas − débito/Pix</strong> (sem descontar o cartão); os rótulos
+              abaixo deixam isso explícito.
+            </p>
             <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 text-sm">
               <div>
-                <span className="text-muted">Entradas:</span> <strong>{money(fechamento.entradas)}</strong>
+                <span className="text-muted">Entradas:</span> <strong>{money(metricasBase.entradas)}</strong>
               </div>
               <div>
-                <span className="text-muted">Saídas corrente:</span> <strong>{money(fechamento.saidas_corrente)}</strong>
+                <span className="text-muted">Saídas corrente (débito/Pix):</span>{" "}
+                <strong>{money(metricasBase.saidasCorrente)}</strong>
               </div>
               <div>
-                <span className="text-muted">Compras no cartão:</span>{" "}
-                <strong>{money(fechamento.compras_cartao)}</strong>
+                <span className="text-muted">Compras no cartão (semana):</span>{" "}
+                <strong>{money(metricasBase.comprasCartao)}</strong>
               </div>
               <div>
-                <span className="text-muted">Sobra:</span> <strong>{money(fechamento.sobra)}</strong>
+                <span
+                  className="text-muted"
+                  title="Valor salvo no fechamento (entradas − saídas corrente, sem cartão)"
+                >
+                  Entradas − débito:
+                </span>{" "}
+                <strong className={metricasBase.sobra >= 0 ? "text-emerald-700" : "text-rose-700"}>
+                  {money(metricasBase.sobra)}
+                </strong>
+              </div>
+              <div
+                className={`rounded-[0.85rem] border px-3 py-2 sm:col-span-2 lg:col-span-1 ${
+                  resultadoOperacional >= 0
+                    ? "border-emerald-500/35 bg-emerald-500/5"
+                    : "border-rose-500/35 bg-rose-500/5"
+                }`}
+              >
+                <span className="text-muted">Resultado operacional:</span>{" "}
+                <strong className={resultadoOperacional >= 0 ? "text-emerald-700" : "text-rose-700"}>
+                  {money(resultadoOperacional)}
+                </strong>
+                <p className="mt-1 text-xs text-muted leading-snug">
+                  Entradas − débito − cartão (mesma lógica da leitura rápida).
+                </p>
               </div>
               <div>
                 <span className="text-muted">Reserva (total registrado):</span>{" "}

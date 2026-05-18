@@ -185,6 +185,10 @@ function shouldDefaultToCurrentTime(prompt: string) {
 function detectTipo(prompt: string): "receita" | "despesa" | "ajuste" | "transferencia" {
   const normalized = normalizeText(prompt);
 
+  if (/\bpix\s+(enviado|mandado)\b/.test(normalized) || /\b(enviei|envio|mandei|mande|passei)\s+(um\s+)?pix\b/.test(normalized)) {
+    return "despesa";
+  }
+
   if (/(salario|recebi|recebimento|ganhei|entrada|pix recebido|deposito)/.test(normalized)) {
     return "receita";
   }
@@ -204,6 +208,10 @@ function detectExplicitTipo(
   prompt: string,
 ): "receita" | "despesa" | "ajuste" | "transferencia" | undefined {
   const normalized = normalizeText(prompt);
+
+  if (/\bpix\s+(enviado|mandado)\b/.test(normalized) || /\b(enviei|envio|mandei|mande|passei)\s+(um\s+)?pix\b/.test(normalized)) {
+    return "despesa";
+  }
 
   if (/(salario|recebi|recebimento|ganhei|entrada|pix recebido|deposito)/.test(normalized)) {
     return "receita";
@@ -231,12 +239,12 @@ function detectMeio(prompt: string) {
     return "pix" as const;
   }
 
-  if (/(cartao de credito|cartão de crédito|credito|crédito)/.test(normalized)) {
-    return "credito" as const;
+  if (/\bdebito\b/.test(normalized)) {
+    return "debito" as const;
   }
 
-  if (/(debito|débito)/.test(normalized)) {
-    return "debito" as const;
+  if (/\bcartao\b/.test(normalized) || /\bcredi(?:to|t|to)?\b/.test(normalized) || /\bcrito\b/.test(normalized)) {
+    return "credito" as const;
   }
 
   if (/(dinheiro|especie|espécie)/.test(normalized)) {
@@ -296,7 +304,7 @@ function findGenericIncomeCategory(categories: CategoriaOption[]) {
 function hasExplicitCategoryCue(prompt: string) {
   const normalized = normalizeText(prompt);
 
-  return /(mercado|supermercado|feira|ifood|restaurante|padaria|lanche|uber|99|combustivel|gasolina|onibus|metro|transporte|farmacia|medico|consulta|saude|aluguel|condominio|luz|agua|internet|moradia|cinema|viagem|show|lazer|bar|salario|pagamento|holerite|freela|freelance|cliente)/.test(
+  return /(mercado|supermercado|feira|ifood|restaurante|padaria|lanche|uber|99|combustivel|gasolina|onibus|metro|transporte|farmacia|medico|consulta|saude|aluguel|condominio|luz|agua|internet|moradia|cinema|viagem|show|lazer|bar|mesada|filho|filha|salario|pagamento|holerite|freela|freelance|cliente)/.test(
     normalized,
   );
 }
@@ -322,6 +330,7 @@ function keywordCategoria(prompt: string, categories: CategoriaOption[], tipo: s
     { terms: /(farmacia|medico|consulta|saude)/, category: "Saude" },
     { terms: /(aluguel|condominio|luz|agua|internet|moradia)/, category: "Moradia" },
     { terms: /(cinema|viagem|show|lazer|bar)/, category: "Lazer" },
+    { terms: /(mesada|filho|filha|filhos|crianca|criança)/, category: "Filhos" },
     { terms: /(salario|pagamento|holerite)/, category: "Salario" },
     { terms: /(freela|freelance|cliente)/, category: "Freelance" },
   ];
@@ -380,6 +389,7 @@ function findMentionedCategoria(prompt: string, categories: CategoriaOption[]) {
     { terms: /(farmacia|medico|consulta|saude)/, category: "Saude" },
     { terms: /(aluguel|condominio|luz|agua|internet|moradia)/, category: "Moradia" },
     { terms: /(cinema|viagem|show|lazer|bar)/, category: "Lazer" },
+    { terms: /(mesada|filho|filha|filhos|crianca|criança)/, category: "Filhos" },
     { terms: /(salario|pagamento|holerite)/, category: "Salario" },
     { terms: /(freela|freelance|cliente)/, category: "Freelance" },
   ];
@@ -413,18 +423,76 @@ function normalizeSearchText(text: string | undefined) {
 }
 
 function promptToDescription(prompt: string) {
+  const parenthesized = prompt.match(/\(([^)]+)\)/)?.[1]?.trim();
   const cleaned = prompt
+    .replace(/\(([^)]+)\)/g, " ")
+    .replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, " ")
+    .replace(/\b(?:as|às)?\s*([01]?\d|2[0-3])[:h]([0-5]\d)\b/gi, " ")
     .replace(/\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|\d+(?:[.,]\d{1,2})?/g, "")
+    .replace(/r\$/gi, " ")
     .replace(/\b(hoje|agora|ontem|amanha)\b/gi, "")
+    .replace(/\b(no|na)?\s*dia\b/gi, " ")
+    .replace(/\bpix\s+(enviado|mandado|recebido)\b/gi, " ")
+    .replace(/\b(enviei|envio|mandei|mande|passei|recebi)\s+(um\s+)?pix\b/gi, " ")
+    .replace(/\bcompr\s+a?no\b/gi, " ")
+    .replace(/\b(compra|comprei|compr|pagamento|paguei)\b/gi, " ")
+    .replace(/\b(no|na|com)?\s*cart[aã]o(?:\s+de)?(?:\s+(?:cr[eé]dito|credito|crito))?\b/gi, " ")
+    .replace(/\b(cr[eé]dito|credito|crito|d[eé]bito|debito|pix)\b/gi, " ")
     .replace(/\b(no|na|de|do|da|para)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
 
-  if (!cleaned) {
+  const withContext = [parenthesized, cleaned].filter(Boolean).join(" ").trim();
+
+  if (!withContext) {
     return "Lancamento rapido";
   }
 
-  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  return prettifyLancamentoDescricao(withContext);
+}
+
+function prettifyLancamentoDescricao(value: string) {
+  const corrections = new Map<string, string>([
+    ["alimentacao", "Alimentação"],
+    ["cartao", "Cartão"],
+    ["credito", "Crédito"],
+    ["debito", "Débito"],
+    ["saude", "Saúde"],
+    ["onibus", "Ônibus"],
+    ["mes", "Mês"],
+    ["mesada", "Mesada"],
+  ]);
+  const smallWords = new Set(["de", "da", "do", "das", "dos", "e", "em", "no", "na"]);
+
+  return value
+    .replace(/[()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean)
+    .map((word, index) => {
+      const normalized = normalizeText(word.replace(/[^\p{L}\p{N}]/gu, ""));
+      const punctuationPrefix = word.match(/^[^\p{L}\p{N}]*/u)?.[0] ?? "";
+      const punctuationSuffix = word.match(/[^\p{L}\p{N}]*$/u)?.[0] ?? "";
+      const core = word.slice(punctuationPrefix.length, word.length - punctuationSuffix.length);
+
+      if (!core) {
+        return word;
+      }
+
+      const corrected = corrections.get(normalized);
+      if (corrected) {
+        return `${punctuationPrefix}${corrected}${punctuationSuffix}`;
+      }
+
+      if (index > 0 && smallWords.has(normalized)) {
+        return `${punctuationPrefix}${normalized}${punctuationSuffix}`;
+      }
+
+      const lower = core.toLocaleLowerCase("pt-BR");
+      return `${punctuationPrefix}${lower.charAt(0).toLocaleUpperCase("pt-BR")}${lower.slice(1)}${punctuationSuffix}`;
+    })
+    .join(" ");
 }
 
 function defaultDescriptionForPrompt(
@@ -983,7 +1051,7 @@ function findQuickAddConta(prompt: string, contas: SelectOption[]) {
     );
   }
 
-  if (/(cartao de credito|cartão de crédito|credito|crédito|cartao|cartão)/.test(normalized)) {
+  if (/\b(cartao|credito|crito)\b/.test(normalized)) {
     return contas.find((item) => item.tipo === "cartao_credito" || /(credito|crédito|cartao|cartão)/.test(normalizeText(item.nome))) ?? null;
   }
 
@@ -1113,6 +1181,14 @@ function applyQuickAddPromptOverrides(
 
   if (amount) {
     next.valorTotal = amount;
+  }
+
+  if (detectedMeio) {
+    const descriptionFromPrompt = promptToDescription(prompt);
+
+    if (descriptionFromPrompt !== "Lancamento rapido") {
+      next.descricao = descriptionFromPrompt;
+    }
   }
 
   return quickAddSuggestionSchema.parse(next);
