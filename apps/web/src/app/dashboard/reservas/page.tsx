@@ -7,6 +7,10 @@ import { DashboardStack } from "@/components/dashboard/dashboard-stack";
 import { requireUser } from "@/lib/server/auth";
 import { timeServerAsync } from "@/lib/server/dashboard-server-timing";
 import {
+  parseRequestedGestaoId,
+  resolveGestaoAtivaForRead,
+} from "@/lib/server/gestao-read-page";
+import {
   getReservasResumoPeriodo,
   listCashAccountBreakdown,
   listLancamentosForContaRange,
@@ -55,10 +59,8 @@ export default async function ReservasPage({ searchParams }: ReservasPageProps) 
 
   const params = await searchParams;
   const gestoes = await listUserGestoes(user.id);
-  const requestedGestaoId =
-    typeof params.gestao === "string" ? Number(params.gestao) : undefined;
-  const gestaoAtiva =
-    gestoes.find((g) => g.id === requestedGestaoId) ?? gestoes[0] ?? null;
+  const requestedGestaoId = parseRequestedGestaoId(params.gestao);
+  const gestaoAtiva = await resolveGestaoAtivaForRead(user.id, gestoes, requestedGestaoId);
   if (!gestaoAtiva) redirect("/onboarding");
 
   const hoje = new Date();

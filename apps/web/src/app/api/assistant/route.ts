@@ -7,7 +7,14 @@ import { NextResponse } from "next/server";
 import type { LancamentoMeio } from "@ltcashflow/validation";
 
 import { auth } from "@/lib/server/auth";
-import { userCanMutateGestao } from "@/lib/server/permissions";
+import { gestaoAccessDeniedResponse, requireReadGestaoApi } from "@/lib/server/gestao-api-guard";
+import { logGestaoAccessDeniedFromError, type SecurityLogContext } from "@/lib/server/security-log";
+import {
+  assertCanMutateGestao,
+  assertFinancialRefsInGestao,
+  assertLancamentoIdsInGestao,
+  GestaoAccessDeniedError,
+} from "@/lib/server/permissions";
 import {
   createLancamento,
   deleteLancamentos,
@@ -23,7 +30,6 @@ import {
   summarizeLancamentosByDia,
   updateLancamentosCompetenciaData,
   updateLancamentosMeio,
-  userHasGestaoAccess,
   type SearchLancamentosInput,
 } from "@/lib/server/repository";
 
@@ -866,6 +872,37 @@ async function normalizeCreateLancamentoArgs(
 }
 
 /** Agrupamentos SQL não filtram por transferência — remove o campo nesse caso. */
+async function assertToolReadFilters(gestaoId: number, args: Record<string, unknown>) {
+  await assertFinancialRefsInGestao({
+    gestaoId,
+    contaId: typeof args.contaId === "number" ? args.contaId : null,
+    categoriaId: typeof args.categoriaId === "number" ? args.categoriaId : null,
+  });
+}
+
+async function assertToolMutateLancamentoIds(userId: number, gestaoId: number, lancamentoIds: number[]) {
+  await assertCanMutateGestao(userId, gestaoId);
+  await assertLancamentoIdsInGestao(lancamentoIds, gestaoId);
+}
+
+function toolAccessDeniedResult(error: unknown, context: SecurityLogContext) {
+  if (error instanceof GestaoAccessDeniedError) {
+    logGestaoAccessDeniedFromError(error, {
+      ...context,
+      action: context.action ?? "assistant.tool",
+    });
+    const message =
+      error.reason === "mutate_denied"
+        ? "Sem permissao para alterar lancamentos nesta gestao."
+        : error.reason === "lancamento_not_in_gestao"
+          ? "Um ou mais lancamentos nao pertencem a esta gestao."
+          : "Conta ou categoria nao pertence a esta gestao.";
+    return JSON.stringify({ erro: message });
+  }
+
+  return null;
+}
+
 function filtersForSummarizeQueries(
   base: SearchLancamentosInput,
 ): SearchLancamentosInput & { tipo?: "receita" | "despesa" | "ajuste" } {
@@ -887,6 +924,8 @@ async function executeTool(
   try {
     switch (name) {
       case "buscar_lancamentos": {
+        await assertToolReadFilters(gestaoId, args);
+
         const rows = await searchLancamentos({
           gestaoId,
           tipo: searchTipo(args.tipo),
@@ -907,6 +946,8 @@ async function executeTool(
       }
 
       case "resumir_lancamentos": {
+        await assertToolReadFilters(gestaoId, args);
+
         const baseFilters: SearchLancamentosInput = {
           gestaoId,
           tipo: searchTipo(args.tipo),
@@ -1002,10 +1043,12 @@ async function executeTool(
           return JSON.stringify({ erro: "Parametros invalidos para criar_lancamento." });
         }
 
-        const pode = await userCanMutateGestao(userId, gestaoId);
-        if (!pode) {
-          return JSON.stringify({ erro: "Sem permissao para criar lancamentos nesta gestao." });
-        }
+        await assertCanMutateGestao(userId, gestaoId);
+        await assertFinancialRefsInGestao({
+          gestaoId,
+          contaId: Number.isFinite(contaId) ? contaId : null,
+          categoriaId: Number.isFinite(categoriaId) ? categoriaId : null,
+        });
 
         // Idempotência: se já existe um lançamento "gêmeo" criado nos últimos 2 minutos,
         // devolve o id existente em vez de inserir de novo. Cobre dois cenários do bug
@@ -1056,10 +1099,7 @@ async function executeTool(
           });
         }
 
-        const pode = await userCanMutateGestao(userId, gestaoId);
-        if (!pode) {
-          return JSON.stringify({ erro: "Sem permissao para deletar lancamentos nesta gestao." });
-        }
+        await assertToolMutateLancamentoIds(userId, gestaoId, ids);
 
         const affected = await deleteLancamentos({ gestaoId, lancamentoIds: ids });
         return JSON.stringify({ status: "deletado", registros_afetados: affected });
@@ -1075,10 +1115,7 @@ async function executeTool(
           return JSON.stringify({ erro: "Meio invalido." });
         }
 
-        const pode = await userCanMutateGestao(userId, gestaoId);
-        if (!pode) {
-          return JSON.stringify({ erro: "Sem permissao para atualizar lancamentos nesta gestao." });
-        }
+        await assertToolMutateLancamentoIds(userId, gestaoId, ids);
 
         const affected = await updateLancamentosMeio({
           gestaoId,
@@ -1094,10 +1131,7 @@ async function executeTool(
           : [];
         const competenciaData = typeof args.data === "string" ? args.data : "";
 
-        const pode = await userCanMutateGestao(userId, gestaoId);
-        if (!pode) {
-          return JSON.stringify({ erro: "Sem permissao para atualizar lancamentos nesta gestao." });
-        }
+        await assertToolMutateLancamentoIds(userId, gestaoId, ids);
 
         const affected = await updateLancamentosCompetenciaData({
           gestaoId,
@@ -1111,6 +1145,15 @@ async function executeTool(
         return JSON.stringify({ erro: `Ferramenta desconhecida: ${name}` });
     }
   } catch (error) {
+    const denied = toolAccessDeniedResult(error, {
+      userId,
+      gestaoId,
+      action: `assistant.tool.${name}`,
+    });
+    if (denied) {
+      return denied;
+    }
+
     return JSON.stringify({ erro: error instanceof Error ? error.message : String(error) });
   }
 }
@@ -1322,8 +1365,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Prompt e gestao sao obrigatorios." }, { status: 400 });
     }
 
-    if (!(await userHasGestaoAccess(userId, gestaoId))) {
-      return NextResponse.json({ error: "Sem acesso a essa gestao." }, { status: 403 });
+    try {
+      await requireReadGestaoApi(userId, gestaoId);
+    } catch (error) {
+      const denied = gestaoAccessDeniedResponse(error, {
+        userId,
+        gestaoId,
+        route: "/api/assistant",
+      });
+      if (denied) {
+        return denied;
+      }
+      throw error;
     }
 
     const messages: Message[] = [];

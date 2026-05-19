@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 
 import { auth } from "@/lib/server/auth";
 import { suggestQuickAdd } from "@/lib/server/ai";
-import { listCategorias, listContas, userHasGestaoAccess } from "@/lib/server/repository";
+import { gestaoAccessDeniedResponse, requireReadGestaoApi } from "@/lib/server/gestao-api-guard";
+import { listCategorias, listContas } from "@/lib/server/repository";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -20,8 +21,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Prompt e gestao sao obrigatorios." }, { status: 400 });
   }
 
-  if (!(await userHasGestaoAccess(userId, gestaoId))) {
-    return NextResponse.json({ error: "Sem acesso a essa gestao." }, { status: 403 });
+  try {
+    await requireReadGestaoApi(userId, gestaoId);
+  } catch (error) {
+    const denied = gestaoAccessDeniedResponse(error, {
+      userId,
+      gestaoId,
+      route: "/api/ai/quick-add",
+    });
+    if (denied) {
+      return denied;
+    }
+    throw error;
   }
 
   const [contas, categorias] = await Promise.all([

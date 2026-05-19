@@ -4,7 +4,12 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { requireUser } from "@/lib/server/auth";
-import { userCanMutateGestao } from "@/lib/server/permissions";
+import {
+  assertCanMutateGestao,
+  assertContaIdsInGestao,
+  GestaoAccessDeniedError,
+} from "@/lib/server/permissions";
+import { logGestaoAccessDeniedFromError } from "@/lib/server/security-log";
 import {
   createFechamentoSemanal,
   getSemanaMetricas,
@@ -95,8 +100,32 @@ export async function fecharSemanaAction(formData: FormData) {
     redirect("/dashboard?status=fechamento-invalido");
   }
 
-  if (!(await userCanMutateGestao(user.id, gestaoId))) {
-    redirect("/dashboard?status=acesso-negado");
+  try {
+    await assertCanMutateGestao(user.id, gestaoId);
+
+    const contaIds = new Set<number>();
+    if (contaCorrenteId > 0) {
+      contaIds.add(contaCorrenteId);
+    }
+    for (const tr of transferencias) {
+      contaIds.add(tr.contaOrigemId);
+      contaIds.add(tr.contaDestinoId);
+    }
+    for (const reserva of reservasPorConta) {
+      contaIds.add(reserva.contaId);
+    }
+
+    await assertContaIdsInGestao([...contaIds], gestaoId);
+  } catch (error) {
+    if (error instanceof GestaoAccessDeniedError) {
+      logGestaoAccessDeniedFromError(error, {
+        userId: user.id,
+        gestaoId,
+        action: "dashboard.fecharSemana",
+      });
+      redirect("/dashboard?status=acesso-negado");
+    }
+    throw error;
   }
 
   const metricas = await getSemanaMetricas({ gestaoId, inicio, fim });

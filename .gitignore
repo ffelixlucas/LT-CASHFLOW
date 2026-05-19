@@ -9,12 +9,16 @@ out/
 coverage/
 .tmp/
 tmp/
+test-results/
+playwright-report/
 
 # Env
 .env
 .env.local
 .env.*.local
+apps/web/.env.test
 apps/web/.env.railway
+apps/web/e2e/.seed-state.json
 
 # OS / logs
 .DS_Store
@@ -32,6 +36,7 @@ docs/.embeddings/
 docs/.registry.json
 docs/procloud-assistant-handoff.zip
 plano do cloud/
+pessoal/
 docs/.chunks/
 docs/.embeddings/
 docs/.registry.json

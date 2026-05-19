@@ -9,6 +9,10 @@ import { DashboardStack } from "@/components/dashboard/dashboard-stack";
 import { requireUser } from "@/lib/server/auth";
 import { timeServerAsync } from "@/lib/server/dashboard-server-timing";
 import {
+  parseRequestedGestaoId,
+  resolveGestaoAtivaForRead,
+} from "@/lib/server/gestao-read-page";
+import {
   getContaCorrentePeriodoResumo,
   getGestaoSaldosPorBucket,
   getResumoFaturasCartaoGestao,
@@ -148,9 +152,9 @@ export default async function DashboardExecutivoPage({ searchParams }: PageProps
 
   const params = await searchParams;
   const gestoes = await listUserGestoes(user.id);
-  const requestedGestaoId = typeof params.gestao === "string" ? Number(params.gestao) : undefined;
+  const requestedGestaoId = parseRequestedGestaoId(params.gestao);
   const escopo = params.escopo === "mes" ? "mes" : "ano";
-  const gestaoAtiva = gestoes.find((item) => item.id === requestedGestaoId) ?? gestoes[0] ?? null;
+  const gestaoAtiva = await resolveGestaoAtivaForRead(user.id, gestoes, requestedGestaoId);
 
   if (!gestaoAtiva) {
     redirect("/onboarding");

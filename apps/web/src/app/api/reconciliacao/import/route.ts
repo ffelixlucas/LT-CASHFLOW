@@ -3,7 +3,11 @@ import { NextResponse } from "next/server";
 import { quickAddSuggestionSchema } from "@ltcashflow/validation";
 
 import { auth } from "@/lib/server/auth";
-import { userCanMutateGestao } from "@/lib/server/permissions";
+import {
+  gestaoAccessDeniedResponse,
+  requireFinancialRefsInGestaoApi,
+  requireMutateGestaoApi,
+} from "@/lib/server/gestao-api-guard";
 import { createLancamento, createTransferencia, listContas } from "@/lib/server/repository";
 
 export async function POST(request: Request) {
@@ -25,8 +29,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Gestao e itens do extrato sao obrigatorios." }, { status: 400 });
   }
 
-  if (!(await userCanMutateGestao(userId, gestaoId))) {
-    return NextResponse.json({ error: "Sem acesso a essa gestao." }, { status: 403 });
+  try {
+    await requireMutateGestaoApi(userId, gestaoId);
+  } catch (error) {
+    const denied = gestaoAccessDeniedResponse(error, {
+      userId,
+      gestaoId,
+      route: "/api/reconciliacao/import",
+    });
+    if (denied) {
+      return denied;
+    }
+    throw error;
   }
 
   const parsedItems = body.items
@@ -42,6 +56,21 @@ export async function POST(request: Request) {
 
   if (contaIds.length !== 1) {
     return NextResponse.json({ error: "A importacao do extrato precisa apontar para uma unica origem." }, { status: 400 });
+  }
+
+  try {
+    await requireFinancialRefsInGestaoApi({ gestaoId, contaId: contaIds[0] });
+  } catch (error) {
+    const denied = gestaoAccessDeniedResponse(error, {
+      userId,
+      gestaoId,
+      route: "/api/reconciliacao/import",
+      entityId: contaIds[0],
+    });
+    if (denied) {
+      return denied;
+    }
+    throw error;
   }
 
   const conta = (await listContas(gestaoId)).find((item) => item.id === contaIds[0]);
@@ -60,6 +89,26 @@ export async function POST(request: Request) {
   const ids: number[] = [];
 
   for (const item of parsedItems) {
+    try {
+      await requireFinancialRefsInGestaoApi({
+        gestaoId,
+        contaId: item.contaId,
+        categoriaId: item.tipo === "transferencia" ? null : item.categoriaId ?? null,
+        contaDestinoId: item.contaDestinoId ?? null,
+      });
+    } catch (error) {
+      const denied = gestaoAccessDeniedResponse(error, {
+        userId,
+        gestaoId,
+        route: "/api/reconciliacao/import",
+        entityId: item.categoriaId ?? item.contaId,
+      });
+      if (denied) {
+        return denied;
+      }
+      throw error;
+    }
+
     if (item.tipo === "transferencia") {
       if (!item.contaDestinoId) {
         return NextResponse.json(

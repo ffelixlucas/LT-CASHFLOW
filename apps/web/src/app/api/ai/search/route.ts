@@ -3,13 +3,17 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/server/auth";
 import { planAssistantSearch } from "@/lib/server/ai";
 import {
+  gestaoAccessDeniedResponse,
+  requireFinancialRefsInGestaoApi,
+  requireReadGestaoApi,
+} from "@/lib/server/gestao-api-guard";
+import {
   findLargestLancamento,
   findLatestLancamento,
   sumLancamentos,
   listCategorias,
   listContas,
   searchLancamentos,
-  userHasGestaoAccess,
 } from "@/lib/server/repository";
 
 function money(value: string | number | null | undefined) {
@@ -37,8 +41,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Prompt e gestao sao obrigatorios." }, { status: 400 });
   }
 
-  if (!(await userHasGestaoAccess(userId, gestaoId))) {
-    return NextResponse.json({ error: "Sem acesso a essa gestao." }, { status: 403 });
+  try {
+    await requireReadGestaoApi(userId, gestaoId);
+  } catch (error) {
+    const denied = gestaoAccessDeniedResponse(error, {
+      userId,
+      gestaoId,
+      route: "/api/ai/search",
+    });
+    if (denied) {
+      return denied;
+    }
+    throw error;
   }
 
   const [contas, categorias] = await Promise.all([
@@ -49,6 +63,25 @@ export async function POST(request: Request) {
   const planned = await planAssistantSearch(prompt, contas, categorias);
   const plan = planned.plan;
   const provider = planned.provider;
+
+  try {
+    await requireFinancialRefsInGestaoApi({
+      gestaoId,
+      contaId: plan.filters.contaId ?? null,
+      categoriaId: plan.filters.categoriaId ?? null,
+    });
+  } catch (error) {
+    const denied = gestaoAccessDeniedResponse(error, {
+      userId,
+      gestaoId,
+      route: "/api/ai/search",
+      entityId: plan.filters.contaId ?? plan.filters.categoriaId,
+    });
+    if (denied) {
+      return denied;
+    }
+    throw error;
+  }
 
   if (plan.intent === "latest_transaction") {
     const latest = await findLatestLancamento({

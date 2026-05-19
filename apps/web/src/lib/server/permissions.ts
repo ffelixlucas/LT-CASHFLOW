@@ -1,10 +1,22 @@
 import "server-only";
 
-import { getUserGestaoRole, type GestaoMemberRole } from "@/lib/server/repository";
+import { canMutateGestao, getUserGestaoRole } from "@/lib/server/gestao-access";
 
-export function canMutateGestao(role: GestaoMemberRole | null) {
-  return role === "proprietario" || role === "administrador" || role === "editor";
-}
+export {
+  assertCanMutateGestao,
+  assertCanReadGestao,
+  assertCategoriaInGestao,
+  assertContaIdsInGestao,
+  assertContaInGestao,
+  assertFinancialRefsInGestao,
+  assertGastoFixoInGestao,
+  assertLancamentoIdsInGestao,
+  assertLancamentoInGestao,
+  GestaoAccessDeniedError,
+  type GestaoMemberRole,
+} from "@/lib/server/gestao-access";
+
+export { canMutateGestao, getUserGestaoRole };
 
 export async function userCanMutateGestao(userId: number, gestaoId: number) {
   const role = await getUserGestaoRole(userId, gestaoId);

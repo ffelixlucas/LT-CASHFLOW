@@ -10,6 +10,10 @@ import { PlanoFixosMesModal } from "@/components/dashboard/plano-fixos-mes-modal
 import { requireUser } from "@/lib/server/auth";
 import { timeServerAsync } from "@/lib/server/dashboard-server-timing";
 import {
+  parseRequestedGestaoId,
+  resolveGestaoAtivaForRead,
+} from "@/lib/server/gestao-read-page";
+import {
   getContaCorrentePeriodoResumo,
   getGestaoSaldosPorBucket,
   getPlanoFixosTemplateItens,
@@ -215,11 +219,9 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
 
   const params = await searchParams;
   const gestoes = await listUserGestoes(user.id);
-  const requestedGestaoId =
-    typeof params.gestao === "string" ? Number(params.gestao) : undefined;
+  const requestedGestaoId = parseRequestedGestaoId(params.gestao);
   const selectedPeriod = normalizePeriod(typeof params.period === "string" ? params.period : undefined);
-  const gestaoAtiva =
-    gestoes.find((item) => item.id === requestedGestaoId) ?? gestoes[0] ?? null;
+  const gestaoAtiva = await resolveGestaoAtivaForRead(user.id, gestoes, requestedGestaoId);
   const gestaoEhFamiliar = gestaoAtiva?.tipo === "familiar";
   const status =
     typeof params.status === "string" ? statusMessages[params.status] ?? null : null;
@@ -283,17 +285,17 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       )
     : null;
   const dataHoje = todayLabel();
-  const entradasPeriodo = Number(resumoContaCorrentePeriodo.entradas ?? 0);
+  const gastosPeriodo = Number(resumoContaCorrentePeriodo.saidas ?? 0);
+  const pagamentosFaturaPeriodo = Number(resumoContaCorrentePeriodo.pagamentos_fatura ?? 0);
   const saidasPeriodo = Number(resumoContaCorrentePeriodo.saidas_total ?? 0);
-  const sobraPeriodo = Number(resumoContaCorrentePeriodo.sobra ?? 0);
   const reservaLiquida =
     Number(resumoContaCorrentePeriodo.guardado ?? 0) - Number(resumoContaCorrentePeriodo.resgatado ?? 0);
+  const movimentoContaPeriodo = Number(resumoContaCorrentePeriodo.saldo ?? 0);
   const patrimonioLiquido = tenhoHoje - Math.max(0, resumoCartao.saldo);
-  const reservaPct = tenhoHoje > 0 ? (guardadoAtual / tenhoHoje) * 100 : 0;
   const fluxoLabel =
-    sobraPeriodo >= 0
-      ? `Sobrando ${money(sobraPeriodo)} no ${periodoAtual.label.toLowerCase()}`
-      : `Faltando ${money(Math.abs(sobraPeriodo))} no ${periodoAtual.label.toLowerCase()}`;
+    disponivelAtual >= 0
+      ? `${money(disponivelAtual)} livres na corrente`
+      : `${money(Math.abs(disponivelAtual))} negativos na corrente`;
   const despesasVisiveisPeriodo = lancamentosPeriodo.filter(
     (item) => item.status !== "cancelado" && item.tipo === "despesa" && item.categoria_nome !== "Saida da conta",
   );
@@ -368,8 +370,9 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               <p className="dashboard-kicker">{periodoAtual.label}</p>
               <h2>{fluxoLabel}</h2>
               <p>
-                Disponível em conta corrente: <strong>{money(disponivelAtual)}</strong>. Reserva protegida em{" "}
-                <strong>{money(guardadoAtual)}</strong>, equivalente a {percent(reservaPct)} do dinheiro mapeado.
+                Reservas em <strong>{money(guardadoAtual)}</strong>. Cartão em aberto no LT:{" "}
+                <strong>{money(Math.max(0, resumoCartao.saldo))}</strong>. O resultado do mês fica separado
+                abaixo para não misturar saldo com movimentação.
               </p>
               <div className="decision-actions">
                 <Link className="decision-button primary" href={`/dashboard/movimentacoes?gestao=${gestaoAtiva.id}`}>
@@ -383,20 +386,22 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
 
             <div className="decision-ledger" aria-label="Resumo financeiro">
               <div>
-                <span>Tenho hoje</span>
-                <strong>{money(tenhoHoje)}</strong>
+                <span>Corrente</span>
+                <strong>{money(disponivelAtual)}</strong>
               </div>
               <div>
-                <span>Entrou</span>
-                <strong className="good">{money(entradasPeriodo)}</strong>
+                <span>Reservas</span>
+                <strong>{money(guardadoAtual)}</strong>
               </div>
               <div>
-                <span>Saiu</span>
-                <strong className="bad">{money(saidasPeriodo)}</strong>
+                <span>Cartão aberto</span>
+                <strong className={resumoCartao.saldo > 0 ? "bad" : "good"}>
+                  {money(Math.max(0, resumoCartao.saldo))}
+                </strong>
               </div>
               <div>
-                <span>Sobra</span>
-                <strong className={sobraPeriodo >= 0 ? "good" : "bad"}>{signedMoney(sobraPeriodo)}</strong>
+                <span>Patrimônio líquido</span>
+                <strong>{money(patrimonioLiquido)}</strong>
               </div>
             </div>
           </section>
@@ -493,8 +498,16 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               </div>
               <div className="signal-list">
                 <div className="signal-row">
-                  <span>Resultado do recorte</span>
-                  <strong className={sobraPeriodo >= 0 ? "good" : "bad"}>{signedMoney(sobraPeriodo)}</strong>
+                  <span>Corrente agora</span>
+                  <strong className={disponivelAtual >= 0 ? "good" : "bad"}>{money(disponivelAtual)}</strong>
+                </div>
+                <div className="signal-row">
+                  <span>Gastos do mês sem fatura</span>
+                  <strong className="bad">{money(gastosPeriodo)}</strong>
+                </div>
+                <div className="signal-row">
+                  <span>Fatura paga no período</span>
+                  <strong className="bad">{money(pagamentosFaturaPeriodo)}</strong>
                 </div>
                 <div className="signal-row">
                   <span>Onde mais saiu dinheiro</span>
@@ -509,15 +522,9 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                 </div>
               </div>
               <p className="projection-note">
-                {sobraPeriodo >= 0 ? (
-                  <>
-                    Recorte positivo: <strong className="good">{signedMoney(sobraPeriodo)}</strong>.
-                  </>
-                ) : (
-                  <>
-                    Recorte negativo: <strong className="bad">{signedMoney(sobraPeriodo)}</strong>.
-                  </>
-                )}
+                O recorte do mês movimentou <strong>{signedMoney(movimentoContaPeriodo)}</strong> na corrente porque
+                inclui fatura, aplicações e resgates. Para decisão diária, use a liquidez atual:{" "}
+                <strong>{money(disponivelAtual)}</strong>.
               </p>
             </article>
 

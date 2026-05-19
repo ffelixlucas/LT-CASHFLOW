@@ -5,6 +5,366 @@ Formato: uma entrada por sessão relevante (mais recente no topo).
 
 ---
 
+## 2026-05-19 — Lançamento controlado familiar (produção privada)
+
+### Contexto
+
+Preparar uso em produção só para Lucas e esposa, sem SaaS público, após Fase 1 multitenant fechada.
+
+### O que foi feito
+
+- `docs/lancamento-controlado-familiar.md`: pronto/não pronto, envs, pré/pós-deploy, gestão familiar, vínculo da esposa via SQL, smoke test, backups, rollback.
+- `apps/web/.env.local.example`: comentários produção vs E2E.
+- `seed-e2e.mjs`: recusa `NODE_ENV=production` e `E2E_ALLOW_SEED=1` sem `DB_NAME` test/e2e.
+- Link em `docs/deploy-railway.md` e seção em `docs/contexto-atual.md`.
+
+### Decisão
+
+**Apto para lançamento familiar privado** com checklist manual e vínculo de membro manual. **Não apto** para amigos/clientes sem convites, rate limit e cadastro fechado.
+
+### Validação
+
+- `pnpm --filter web test` — 51 passed.
+- `pnpm --filter web typecheck` — ok.
+- `pnpm --filter web lint` — ok.
+- `pnpm --filter web build` — ok.
+- CI `.github/workflows/ci.yml` — consistente (MySQL e2e, sem secrets de prod).
+
+### Próximos passos
+
+- [ ] Smoke test em produção (guia).
+- [ ] Vincular esposa em `gestao_membros`.
+- [ ] Backup Railway antes de mudanças de schema.
+
+---
+
+## 2026-05-19 — Revisão final Fase 1 multitenant (auditoria)
+
+### Contexto
+
+Fechar Fase 1 antes de performance/índices (Fase 2): auditar lacunas em convites, soft delete, rate limit, logs, CI e autorização residual.
+
+### O que foi auditado
+
+| Área | Resultado |
+|------|-----------|
+| **Convites** | Apenas schema (`packages/db`, `backend/database/schema.sql`). Sem API/UI de criar/aceitar. Expiração e status não aplicados no app — **não implementado**. |
+| **Soft delete** | Lançamentos: `DELETE FROM lancamentos` em `repository.deleteLancamentos`. Risco para histórico/fechamento se exclusão frequente — **decisão: manter hard delete na Fase 1**; soft delete planejado na arquitetura para fase posterior. |
+| **Rate limiting** | Sem middleware/app limit em login, `/api/assistant`, `/api/ai/search`, conciliação. Apenas retry/mensagem para rate limit do Groq — **pendência de segurança**. |
+| **Logs** | Centralizados em APIs via `gestaoAccessDeniedResponse` + `security-log` (sem payload bruto). Dashboard: `denyGestaoAccess` / `gestao-read-page` logam read denied. Gap: ~5 server actions usam `userCanMutateGestao` + redirect sem log estruturado. |
+| **CI** | `.github/workflows/ci.yml`: env fixo no job, sem `secrets.*` de produção; `DB_NAME=lt_cashflow_e2e`; `seed:e2e` exige nome test/e2e ou `E2E_ALLOW_SEED`. |
+| **Autorização** | 12 rotas API financeiras com guards; `repository` usa `ensureFinancialRefsInGestao` em creates/updates críticos; dashboard mutations com `guardMutate*` ou `userCanMutateGestao`; páginas leitura com `resolveGestaoAtivaForRead`. `updateGestaoMembroPapel` valida membro na gestão no SQL. |
+
+### Correções de código
+
+Nenhuma — não foram encontrados bugs pequenos óbvios; lacunas maiores documentadas como pendência.
+
+### Decisão
+
+**Fase 1 de isolamento IDOR está fechada** para o escopo entregue (helpers + testes + E2E). Convites, rate limit e soft delete ficam explicitamente fora e podem entrar em sprint paralela à Fase 2.
+
+### Validação
+
+- `pnpm --filter web test` — 51 passed.
+- `pnpm --filter web typecheck` — ok.
+- `pnpm --filter web lint` — ok (2 warnings antigos).
+
+### Próximos passos
+
+- [ ] Fase 2: índices, pool, cache.
+- [ ] Convites + rate limiting (se prioridade de produto).
+- [ ] Soft delete de lançamentos (se auditoria exigir).
+
+---
+
+## 2026-05-19 — CI: MySQL isolado + Vitest + E2E
+
+### Contexto
+
+Fechar Fase 1 multitenant com pipeline que não toca banco real nem secrets pessoais.
+
+### O que foi feito
+
+- `.github/workflows/ci.yml`: service MySQL 8, env `lt_cashflow_e2e`, senha só no job.
+- `scripts/ci-mysql-init.mjs` + `pnpm db:ci:init`: schema consolidado (`backend/database/schema.sql`) + patch `gestoes.inicio_em` / `percentual_reserva`.
+- Steps: install, Playwright chromium, init DB, typecheck, lint, vitest, `seed:e2e`, `test:e2e`.
+- `docs/e2e-multitenant.md` — seção CI e comando local equivalente.
+
+### Decisão
+
+Não rodar `pnpm db:migrate` (Drizzle) no CI: pasta `packages/db/drizzle` inexistente; migrations SQL em `backend/database/migrations/` são parciais/dados e não entram no job. Documentado como limitação até unificar migrations.
+
+### Validação
+
+- `pnpm --filter web test` — 51 passed.
+- `pnpm --filter web typecheck` — ok.
+- `pnpm --filter web lint` — ok.
+- Workflow YAML revisado manualmente; E2E no runner depende do primeiro push/PR no GitHub.
+
+### Próximos passos
+
+- [ ] Unificar migrations (Drizzle ou runner SQL) e incluir no `db:ci:init`.
+- [ ] Fase 2 multitenant (índices, cache).
+
+---
+
+## 2026-05-19 — E2E Playwright: isolamento multitenant (dois usuários sintéticos)
+
+### Contexto
+
+Fase 1 multitenant: validar na UI/URL que um usuário não acessa gestão alheia, com seed isolado (sem dados do Lucas).
+
+### O que foi feito
+
+- Playwright em `apps/web` (`@playwright/test`, `playwright.config.ts`).
+- `scripts/seed-e2e.mjs`: limpa/recria usuários `e2e-*@ltcashflow.test`, Gestões A/B, viewer na A; grava `e2e/.seed-state.json`.
+- `apps/web/.env.test.example` + proteção de seed (`DB_NAME` com e2e/test ou `E2E_ALLOW_SEED=1`).
+- `docs/e2e-multitenant.md` com passo a passo.
+- 6 testes em `e2e/multitenant-isolation.spec.ts`: login A/B, `?gestao=` externo → acesso negado, viewer lê, viewer 403 em import, editor A 403 em preview da gestão B.
+
+### Decisão
+
+Não improvisar no banco Railway/real: sem MySQL de teste configurado, `globalSetup` avisa e os testes são skipped. Mutação de visualizador assertada via API (UI do dashboard não esconde todos os controles).
+
+### Validação
+
+- `pnpm --filter web test` — 51 passed.
+- `pnpm --filter web typecheck` — ok (`e2e/` e `playwright.config.ts` excluídos do tsc do app).
+- `pnpm --filter web lint` — ok.
+- `pnpm --filter web test:e2e` — 6 skipped neste ambiente (sem credencial MySQL em `.env.test`).
+
+### Próximos passos
+
+- [x] Job CI com MySQL + `seed:e2e` + `test:e2e` (entrada CI no mesmo dia).
+
+---
+
+## 2026-05-19 — Guard explícito de leitura nas páginas do dashboard
+
+### Contexto
+
+Fase 1 multitenant: após helpers, testes e logs, auditar páginas server-only de leitura para garantir que `gestaoId` da URL não chega ao repository sem validação.
+
+### Auditoria (10 rotas `page.tsx`)
+
+| Página | Antes | Depois |
+|--------|-------|--------|
+| `dashboard/page.tsx` | `listUserGestoes` + `find` | `resolveGestaoAtivaForRead` |
+| `meses`, `cartao`, `config`, `reservas`, `semana`, `executivo`, `estado-inicial` | idem | idem |
+| `movimentacoes`, `insights` | redirect puro (repassa `?gestao=`) | sem alteração — destino (`meses`) valida |
+
+### O que foi feito
+
+- `gestao-read-page.ts`: `parseRequestedGestaoId`, `resolveGestaoAtivaForRead` (membro na lista → sem assert extra; `?gestao=` externo → `assertCanReadGestao` + log + redirect).
+- 8 páginas de leitura migradas para o helper.
+- `gestao-read-page.test.ts` (5 testes).
+
+### Decisão
+
+Não duplicar `assertCanReadGestao` quando a gestão já veio de `listUserGestoes`. Assert + log só quando o param URL pede gestão que não está na lista do usuário.
+
+### Validação
+
+- `pnpm --filter web test` — 51 passed.
+- `pnpm --filter web typecheck` — ok.
+- `pnpm --filter web lint` — ok (2 warnings antigos).
+- `pnpm --filter web build` — ok.
+
+### Próximos passos
+
+- [x] E2E Playwright com usuários sintéticos (ver entrada dedicada no mesmo dia).
+
+---
+
+## 2026-05-19 — Logs estruturados de acesso negado (Fase 1 multitenant)
+
+### Contexto
+
+Continuação da Fase 1: registrar negações de segurança sem vazar dados sensíveis, integrado ao guard HTTP e a redirects do dashboard.
+
+### O que foi feito
+
+- Módulo `apps/web/src/lib/server/security-log.ts`:
+  - eventos `financial.read.denied`, `financial.mutation.denied`, `financial.entity.denied`;
+  - campos: `event`, `timestamp`, `userId`, `gestaoId`, `reason`, `entity`, `entityId` / `entityCount`, `route` / `action`;
+  - `setSecurityLogSink` / `resetSecurityLogSink` para testes.
+- `gestao-api-guard.ts`: `gestaoAccessDeniedResponse(error, context)` loga antes do 403.
+- Integração em rotas API (conciliação, quick-add, assistente dedicadas, busca IA) com `route` e metadados seguros.
+- `dashboard/actions.ts`: `denyGestaoAccess` e guards de mutation; `dashboard/semana/actions.ts` no catch de `GestaoAccessDeniedError`.
+- Assistente `route.ts`: `toolAccessDeniedResult` para tools (POST principal usa guard com context).
+- Testes: `security-log.test.ts` (6); asserts de log em 403 em `reconciliacao-routes.test.ts` (mock do sink).
+
+### Decisão
+
+Um bloqueio gera um log: guard HTTP centraliza APIs; tools do assistente logam no catch da tool; dashboard usa helper único — sem log duplicado em `gestao-access.ts`.
+
+### Validação
+
+- `pnpm --filter web test` — 46 passed.
+- `pnpm --filter web typecheck` — ok.
+- `pnpm --filter web lint` — ok (2 warnings antigos).
+
+### Próximos passos
+
+- [x] Revisar asserts explícitos em páginas server-only de leitura (dashboard).
+- [ ] E2E Playwright (opcional).
+
+---
+
+## 2026-05-19 — Testes HTTP de rotas críticas (IDOR)
+
+### Contexto
+
+Continuação dos testes Vitest: validar que APIs críticas retornam 401/403/400 sem banco real.
+
+### O que foi feito
+
+- Infraestrutura em `src/test/helpers/`: `tenant-fixtures`, `mock-gestao-db`, `http-route-test`, `route-payloads`.
+- Testes HTTP (20 novos, total 40):
+  - `reconciliacao-routes.test.ts` — preview e import;
+  - `quick-add-save-route.test.ts`;
+  - `assistant-lancamentos-routes.test.ts` — delete e update meio.
+- Mock de `@/lib/server/auth`, `@ltcashflow/db` e funções pontuais do `repository`.
+- `gestao-access.test.ts` refatorado para reutilizar `mock-gestao-db`.
+
+### Cenários cobertos
+
+- 401 sem sessão; 400 payload inválido; 403 outsider; 403 visualizador em mutation; 403 IDs filhos de outra gestão.
+
+### Validação
+
+- `pnpm --filter web test` — 40 passed.
+- `pnpm --filter web typecheck` — ok.
+- `pnpm --filter web lint` — ok (2 warnings antigos).
+
+### Próximos passos
+
+- [x] Log `financial.mutation.denied` (ver entrada de logs estruturados no mesmo dia).
+- [ ] E2E Playwright para fluxos completos (opcional).
+
+---
+
+## 2026-05-19 — Testes Vitest de isolamento (gestao-access)
+
+### Contexto
+
+Fase 1 multitenant precisava de testes automatizados para evitar regressão de IDOR nos helpers tipados.
+
+### O que foi feito
+
+- Vitest configurado em `apps/web` (`vitest.config.ts`, stub `server-only`).
+- Scripts: `pnpm --filter web test`, `test:watch`; raiz: `pnpm test`.
+- `gestao-access.test.ts`: 20 testes com mock de `@ltcashflow/db` (sem MySQL real).
+- Cenários: read/mutate por papel, conta/categoria/lançamento de outra gestão, lote de lançamentos, `assertFinancialRefsInGestao`, `canMutateGestao`.
+
+### Decisão
+
+Testes unitários mockam o pool; não usam gestão `2` nem dados reais. Integração HTTP fica para etapa seguinte.
+
+### Validação
+
+- `pnpm --filter web test` — 20 passed.
+- `pnpm --filter web typecheck` — ok.
+- `pnpm --filter web lint` — ok (2 warnings antigos).
+
+### Próximos passos
+
+- [x] Testes de rotas API com mock de sessão.
+- [x] Log `financial.mutation.denied`.
+
+---
+
+## 2026-05-19 — Multitenant: assistente, conciliação e demais mutations
+
+### Contexto
+
+Continuação da Fase 1: aplicar o mesmo padrão de `gestao-access.ts` nos fluxos de maior risco fora do dashboard de lançamentos.
+
+### O que foi feito
+
+- Criado `apps/web/src/lib/server/gestao-api-guard.ts` (`gestaoAccessDeniedResponse`, `requireReadGestaoApi`, `requireMutateGestaoApi`, `requireFinancialRefsInGestaoApi`).
+- `gestao-access.ts`: `assertLancamentoIdsInGestao`, `assertContaIdsInGestao`.
+- Assistente: `api/assistant/route.ts` (leitura com filtros validados; mutations com refs/lançamentos); rotas dedicadas (`create-account`, `rename-account`, `keep-accounts`, `update/delete-lancamentos`, `update-lancamentos-data`).
+- Conciliação: `api/reconciliacao/preview` (read + conta), `import` (mutate + refs por item).
+- IA: `api/ai/quick-add` (read), `api/ai/search` (read + filtros), `quick-add/save` alinhado ao guard HTTP.
+- Dashboard: `createGastoFixo`, `updateContaSaldoInicial`, `createCategoria` (update), plano fixos, `semana/actions` (contas do fechamento).
+- Repository: `updateLancamentosMeio`, `updateLancamentosCompetenciaData`, `createGastoFixo` validam refs/IDs.
+
+### Validação
+
+- `pnpm --filter web typecheck` — ok.
+- `pnpm --filter web lint` — ok (2 warnings antigos).
+- `pnpm --filter web build` — ok.
+
+### Próximos passos
+
+- [ ] Vitest + cenários IDOR (assistente, conciliação, visualizador).
+- [ ] Log estruturado `financial.mutation.denied`.
+
+---
+
+## 2026-05-19 — Hardening multitenant (lançamentos e refs filhas)
+
+### Contexto
+
+Início da Fase 1 da arquitetura multitenant: bloquear IDOR por `gestao_id` e validar IDs filhos (conta, categoria, lançamento) nas mutations financeiras críticas.
+
+### O que foi feito
+
+- Criado `apps/web/src/lib/server/gestao-access.ts` com helpers tipados e SQL fixo:
+  - membership: `userHasGestaoAccess`, `getUserGestaoRole`, `assertCanReadGestao`, `assertCanMutateGestao`;
+  - entidades: `assertContaInGestao`, `assertCategoriaInGestao`, `assertLancamentoInGestao`, `assertGastoFixoInGestao`, `assertFaturaInGestao`;
+  - agregador: `assertFinancialRefsInGestao` / `ensureFinancialRefsInGestao`.
+- `permissions.ts` reexporta asserts; `userCanMutateGestao` mantido para compatibilidade.
+- `repository.ts`: membership movido para `gestao-access`; `createLancamento`, `createTransferencia`, `updateLancamento`, `createParcelamentoNoCartao` chamam `ensureFinancialRefsInGestao`; query de conta em create usa `gestao_id`.
+- `dashboard/actions.ts`: guards em create/update/delete lançamento, transferência e parcelamento.
+- `api/ai/quick-add/save/route.ts`: `assertCanMutateGestao` + `assertFinancialRefsInGestao` (item e batch).
+
+### Decisões
+
+- Sem helper genérico com nome de tabela dinâmico.
+- Visualizador continua bloqueado via `assertCanMutateGestao` (papéis `proprietario` / `administrador` / `editor` apenas).
+- `GestaoAccessDeniedError` com `reason` para respostas inline/API.
+
+### Validação
+
+- `pnpm --filter web typecheck` — ok.
+- `pnpm --filter web lint` — ok (2 warnings antigos em outros arquivos).
+- Build não rodado (sem mudança de UI; APIs com novo 403 em refs inválidas).
+
+### Próximos passos
+
+- [ ] Configurar Vitest e testes de isolamento (cenários 3–8 e 12 do doc de arquitetura).
+- [ ] Aplicar asserts em assistente, conciliação, gastos fixos e demais mutations.
+- [ ] Log estruturado em negações de acesso.
+
+---
+
+## 2026-05-19 — Protocolo de handoff entre IAs
+
+### Contexto
+
+Foi definida uma estratégia de economia de tokens para continuar conversas e tarefas entre ChatGPT, Gemini, Claude, Cursor ou outro agente sem depender do histórico completo do chat.
+
+### O que foi feito
+
+- Criado `docs/contexto-atual.md` como ponto de entrada curto para qualquer IA.
+- Criado `docs/protocolo-handoff-ia.md` com regras de leitura, escrita, diário e encerramento de sessão.
+- Definido que dados pessoais sensíveis ficam em `pessoal/`, ignorado pelo Git.
+
+### Decisão
+
+Toda sessão relevante deve atualizar:
+
+- `docs/contexto-atual.md`, quando o estado atual mudar;
+- `docs/diario-desenvolvimento.md`, quando houver entrega, decisão, ajuste de dados ou mudança arquitetural.
+
+### Validação
+
+- Alteração documental. Nenhum teste técnico rodado.
+
+---
+
 ## 2026-05-18 — Conciliação cartão, parcelas futuras e melhorias de fechamento
 
 ### Código entregue

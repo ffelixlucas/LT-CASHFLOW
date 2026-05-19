@@ -3,7 +3,11 @@ import { NextResponse } from "next/server";
 import { renameAccountSuggestionSchema } from "@ltcashflow/validation";
 
 import { auth } from "@/lib/server/auth";
-import { userCanMutateGestao } from "@/lib/server/permissions";
+import {
+  gestaoAccessDeniedResponse,
+  requireFinancialRefsInGestaoApi,
+  requireMutateGestaoApi,
+} from "@/lib/server/gestao-api-guard";
 import { updateContaNome } from "@/lib/server/repository";
 
 export async function POST(request: Request) {
@@ -21,14 +25,42 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Gestao obrigatoria." }, { status: 400 });
   }
 
-  if (!(await userCanMutateGestao(userId, gestaoId))) {
-    return NextResponse.json({ error: "Sem acesso a essa gestao." }, { status: 403 });
+  try {
+    await requireMutateGestaoApi(userId, gestaoId);
+  } catch (error) {
+    const denied = gestaoAccessDeniedResponse(error, {
+      userId,
+      gestaoId,
+      route: "/api/assistant/rename-account",
+    });
+    if (denied) {
+      return denied;
+    }
+    throw error;
   }
 
   const parsed = renameAccountSuggestionSchema.safeParse(body.suggestion);
 
   if (!parsed.success) {
     return NextResponse.json({ error: "Sugestao de renomeacao invalida." }, { status: 400 });
+  }
+
+  try {
+    await requireFinancialRefsInGestaoApi({
+      gestaoId,
+      contaId: parsed.data.contaId,
+    });
+  } catch (error) {
+    const denied = gestaoAccessDeniedResponse(error, {
+      userId,
+      gestaoId,
+      route: "/api/assistant/rename-account",
+      entityId: parsed.data.contaId,
+    });
+    if (denied) {
+      return denied;
+    }
+    throw error;
   }
 
   const ok = await updateContaNome({

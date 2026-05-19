@@ -3,7 +3,10 @@ import { NextResponse } from "next/server";
 import { createAccountSuggestionSchema } from "@ltcashflow/validation";
 
 import { auth } from "@/lib/server/auth";
-import { userCanMutateGestao } from "@/lib/server/permissions";
+import {
+  gestaoAccessDeniedResponse,
+  requireMutateGestaoApi,
+} from "@/lib/server/gestao-api-guard";
 import { createConta } from "@/lib/server/repository";
 
 export async function POST(request: Request) {
@@ -21,8 +24,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Gestao obrigatoria." }, { status: 400 });
   }
 
-  if (!(await userCanMutateGestao(userId, gestaoId))) {
-    return NextResponse.json({ error: "Sem acesso a essa gestao." }, { status: 403 });
+  try {
+    await requireMutateGestaoApi(userId, gestaoId);
+  } catch (error) {
+    const denied = gestaoAccessDeniedResponse(error, {
+      userId,
+      gestaoId,
+      route: "/api/assistant/create-account",
+    });
+    if (denied) {
+      return denied;
+    }
+    throw error;
   }
 
   const parsed = createAccountSuggestionSchema.safeParse(body.suggestion);

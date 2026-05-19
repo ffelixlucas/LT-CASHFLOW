@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 
 import { normalizeDateInput } from "@/lib/date";
 import { auth } from "@/lib/server/auth";
-import { listCategorias, listContas, listLancamentosForContaRange, userHasGestaoAccess } from "@/lib/server/repository";
+import {
+  gestaoAccessDeniedResponse,
+  requireFinancialRefsInGestaoApi,
+  requireReadGestaoApi,
+} from "@/lib/server/gestao-api-guard";
+import { listCategorias, listContas, listLancamentosForContaRange } from "@/lib/server/repository";
 import { buildStatementPreview, parseOfxText, parseStatementText } from "@/lib/server/statement-reconciliation";
 
 export async function POST(request: Request) {
@@ -33,8 +38,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "A data base do trecho precisa estar no formato dd/mm/aaaa." }, { status: 400 });
   }
 
-  if (!(await userHasGestaoAccess(userId, gestaoId))) {
-    return NextResponse.json({ error: "Sem acesso a essa gestao." }, { status: 403 });
+  try {
+    await requireReadGestaoApi(userId, gestaoId);
+    await requireFinancialRefsInGestaoApi({ gestaoId, contaId });
+  } catch (error) {
+    const denied = gestaoAccessDeniedResponse(error, {
+      userId,
+      gestaoId,
+      route: "/api/reconciliacao/preview",
+    });
+    if (denied) {
+      return denied;
+    }
+    throw error;
   }
 
   const conta = (await listContas(gestaoId)).find((item) => item.id === contaId);

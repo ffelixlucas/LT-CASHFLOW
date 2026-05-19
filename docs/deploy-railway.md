@@ -1,5 +1,7 @@
 # Deploy no Railway
 
+Para **lançamento familiar privado** (checklists, membros, smoke tests): veja [lancamento-controlado-familiar.md](./lancamento-controlado-familiar.md).
+
 O serviço certo para produção hoje é o app Next em `apps/web`.
 
 Nao suba o `backend/` legado. O produto atual roda como app fullstack em Next.js:

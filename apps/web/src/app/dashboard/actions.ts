@@ -19,7 +19,13 @@ import {
 
 import { normalizeDateInput, normalizeTimeInput } from "@/lib/date";
 import { requireUser } from "@/lib/server/auth";
-import { userCanMutateGestao } from "@/lib/server/permissions";
+import {
+  assertCanMutateGestao,
+  assertFinancialRefsInGestao,
+  GestaoAccessDeniedError,
+  userCanMutateGestao,
+} from "@/lib/server/permissions";
+import { logGestaoAccessDeniedFromError } from "@/lib/server/security-log";
 import {
   getUserGestaoRole,
   createCategoria,
@@ -77,6 +83,91 @@ export type LancamentoInlineResult =
 
 function isInlineLancamentoMutation(formData: FormData) {
   return formData.get("inline") === "1";
+}
+
+function denyGestaoAccess(
+  gestaoId: number,
+  error: GestaoAccessDeniedError,
+  userId: number,
+  action: string,
+) {
+  logGestaoAccessDeniedFromError(error, {
+    userId,
+    gestaoId,
+    action,
+  });
+  redirect(dashboardUrl(gestaoId, "acesso-negado"));
+}
+
+async function guardMutateFinancialRefs(
+  userId: number,
+  gestaoId: number,
+  refs: Parameters<typeof assertFinancialRefsInGestao>[0],
+) {
+  try {
+    await assertCanMutateGestao(userId, gestaoId);
+    await assertFinancialRefsInGestao(refs);
+  } catch (error) {
+    if (error instanceof GestaoAccessDeniedError) {
+      denyGestaoAccess(gestaoId, error, userId, "dashboard.guardMutateFinancialRefs");
+    }
+    throw error;
+  }
+}
+
+async function guardPlanoFixosItensInGestao(
+  userId: number,
+  gestaoId: number,
+  itens: Array<{ contaId: number; categoriaId: number }>,
+) {
+  try {
+    await assertCanMutateGestao(userId, gestaoId);
+
+    for (const item of itens) {
+      await assertFinancialRefsInGestao({
+        gestaoId,
+        contaId: item.contaId,
+        categoriaId: item.categoriaId,
+      });
+    }
+  } catch (error) {
+    if (error instanceof GestaoAccessDeniedError) {
+      denyGestaoAccess(gestaoId, error, userId, "dashboard.guardPlanoFixosItens");
+    }
+    throw error;
+  }
+}
+
+async function guardMutateLancamento(
+  userId: number,
+  gestaoId: number,
+  refs: Parameters<typeof assertFinancialRefsInGestao>[0],
+  inline: boolean,
+): Promise<LancamentoInlineResult | void> {
+  try {
+    await assertCanMutateGestao(userId, gestaoId);
+    await assertFinancialRefsInGestao(refs);
+  } catch (error) {
+    if (error instanceof GestaoAccessDeniedError) {
+      if (inline) {
+        logGestaoAccessDeniedFromError(error, {
+          userId,
+          gestaoId,
+          action: "dashboard.guardMutateLancamento.inline",
+          entityId: refs.lancamentoId ?? undefined,
+        });
+        return {
+          ok: false,
+          error:
+            error.reason === "mutate_denied"
+              ? "Voce nao tem permissao para alterar esta gestao."
+              : "Conta, categoria ou lancamento nao pertence a esta gestao.",
+        };
+      }
+      denyGestaoAccess(gestaoId, error, userId, "dashboard.guardMutateLancamento");
+    }
+    throw error;
+  }
 }
 
 function revalidateLancamentoPaths() {
@@ -177,6 +268,8 @@ export async function updateContaSaldoInicialAction(formData: FormData) {
     redirect(stateUrl(gestaoId, "saldo-inicial-invalido"));
   }
 
+  await guardMutateFinancialRefs(user.id, gestaoId, { gestaoId, contaId });
+
   const updated = await updateContaSaldoInicial({
     gestaoId,
     contaId,
@@ -241,6 +334,8 @@ export async function createCategoriaAction(formData: FormData) {
   const categoriaId = categoriaIdRaw ? Number(categoriaIdRaw) : null;
 
   if (categoriaId) {
+    await guardMutateFinancialRefs(user.id, gestaoId, { gestaoId, categoriaId });
+
     const updated = await updateCategoria({
       gestaoId,
       userId: user.id,
@@ -268,10 +363,6 @@ export async function createGastoFixoAction(formData: FormData) {
   const gestaoId = Number(formData.get("gestaoId"));
   const anoMes = String(formData.get("anoMes") ?? new Date().toISOString().slice(0, 7));
 
-  if (!(await userCanMutateGestao(user.id, gestaoId))) {
-    redirect("/dashboard?status=acesso-negado");
-  }
-
   const parsed = createGastoFixoSchema.safeParse({
     contaId: formData.get("contaId"),
     categoriaId: formData.get("categoriaId"),
@@ -285,6 +376,12 @@ export async function createGastoFixoAction(formData: FormData) {
   if (!parsed.success) {
     redirect(dashboardUrl(gestaoId, "gasto-fixo-invalido"));
   }
+
+  await guardMutateFinancialRefs(user.id, gestaoId, {
+    gestaoId,
+    contaId: parsed.data.contaId,
+    categoriaId: parsed.data.categoriaId,
+  });
 
   await createGastoFixo({
     gestaoId,
@@ -306,9 +403,8 @@ export async function savePlanoFixosMesAction(payload: unknown) {
   }
 
   const { gestaoId, itens } = parsed.data;
-  if (!(await userCanMutateGestao(user.id, gestaoId))) {
-    redirect("/dashboard?status=acesso-negado");
-  }
+
+  await guardPlanoFixosItensInGestao(user.id, gestaoId, itens);
 
   try {
     await upsertPlanoFixosTemplate({ gestaoId, userId: user.id, itens });
@@ -332,14 +428,13 @@ export async function gerarPrevistosPlanoFixosMesAction(payload: unknown) {
   }
 
   const { gestaoId, itens, anoMesDestino, competenciaData } = parsed.data;
-  if (!(await userCanMutateGestao(user.id, gestaoId))) {
-    redirect("/dashboard?status=acesso-negado");
-  }
 
   const itensParaLancar = itens ?? (await getPlanoFixosTemplateItens(gestaoId));
   if (itensParaLancar.length === 0) {
     redirect(dashboardUrl(gestaoId, "plano-fixos-vazio"));
   }
+
+  await guardPlanoFixosItensInGestao(user.id, gestaoId, itensParaLancar);
 
   const dataLancamento = competenciaData ?? `${anoMesDestino}-01`;
   await syncLancamentosPrevistosFromPlanoFixosMes({
@@ -362,10 +457,6 @@ export async function createLancamentoAction(formData: FormData) {
   const competenciaHora = normalizeTimeInput(formData.get("competenciaHora"));
   const vencimentoData = normalizeDateInput(formData.get("vencimentoData"));
 
-  if (!(await userCanMutateGestao(user.id, gestaoId))) {
-    redirect("/dashboard?status=acesso-negado");
-  }
-
   if (formData.get("gerarParcelas") === "on") {
     const tipo = String(formData.get("tipo") ?? "");
     const meio = String(formData.get("meio") ?? "");
@@ -387,6 +478,12 @@ export async function createLancamentoAction(formData: FormData) {
     if (!parcelParsed.success) {
       redirect(dashboardUrl(gestaoId, "parcelamento-invalido"));
     }
+
+    await guardMutateFinancialRefs(user.id, gestaoId, {
+      gestaoId,
+      contaId: parcelParsed.data.contaId,
+      categoriaId: parcelParsed.data.categoriaId,
+    });
 
     try {
       await createParcelamentoNoCartao({
@@ -423,6 +520,13 @@ export async function createLancamentoAction(formData: FormData) {
     redirect(dashboardUrl(gestaoId, "lancamento-invalido"));
   }
 
+  await guardMutateFinancialRefs(user.id, gestaoId, {
+    gestaoId,
+    contaId: parsed.data.contaId,
+    categoriaId: parsed.data.categoriaId ?? null,
+    contaDestinoId: parsed.data.contaDestinoId ?? null,
+  });
+
   await createLancamento({
     gestaoId,
     userId: user.id,
@@ -440,10 +544,6 @@ export async function createParcelamentoCartaoAction(formData: FormData) {
   const gestaoId = Number(formData.get("gestaoId"));
   const primeiraCompetenciaData = normalizeDateInput(formData.get("primeiraCompetenciaData"));
   const competenciaHora = normalizeTimeInput(formData.get("competenciaHora"));
-
-  if (!(await userCanMutateGestao(user.id, gestaoId))) {
-    redirect("/dashboard?status=acesso-negado");
-  }
 
   if (!primeiraCompetenciaData) {
     redirect(dashboardUrl(gestaoId, "parcelamento-invalido"));
@@ -463,6 +563,12 @@ export async function createParcelamentoCartaoAction(formData: FormData) {
   if (!parsed.success) {
     redirect(dashboardUrl(gestaoId, "parcelamento-invalido"));
   }
+
+  await guardMutateFinancialRefs(user.id, gestaoId, {
+    gestaoId,
+    contaId: parsed.data.contaId,
+    categoriaId: parsed.data.categoriaId,
+  });
 
   try {
     await createParcelamentoNoCartao({
@@ -488,10 +594,6 @@ export async function createTransferenciaAction(formData: FormData) {
   const competenciaHora = normalizeTimeInput(formData.get("competenciaHora"));
   const vencimentoData = normalizeDateInput(formData.get("vencimentoData"));
 
-  if (!(await userCanMutateGestao(user.id, gestaoId))) {
-    redirect("/dashboard?status=acesso-negado");
-  }
-
   const parsed = createTransferenciaSchema.safeParse({
     contaOrigemId: formData.get("contaOrigemId"),
     contaDestinoId: formData.get("contaDestinoId"),
@@ -507,6 +609,12 @@ export async function createTransferenciaAction(formData: FormData) {
   if (!parsed.success) {
     redirect(dashboardUrl(gestaoId, "transferencia-invalida"));
   }
+
+  await guardMutateFinancialRefs(user.id, gestaoId, {
+    gestaoId,
+    contaId: parsed.data.contaOrigemId,
+    contaDestinoId: parsed.data.contaDestinoId,
+  });
 
   await createTransferencia({
     gestaoId,
@@ -539,13 +647,6 @@ export async function updateLancamentoAction(
   const competenciaHora = normalizeTimeInput(formData.get("competenciaHora"));
   const vencimentoData = normalizeDateInput(formData.get("vencimentoData"));
 
-  if (!(await userCanMutateGestao(user.id, gestaoId))) {
-    if (inline) {
-      return { ok: false, error: "Voce nao tem permissao para alterar esta gestao." };
-    }
-    redirect("/dashboard?status=acesso-negado");
-  }
-
   const tipoRaw = formData.get("tipo");
   const tipo =
     tipoRaw === "transferencia"
@@ -577,6 +678,22 @@ export async function updateLancamentoAction(
       return { ok: false, error: "Dados invalidos. Revise os campos e tente novamente." };
     }
     redirect(dashboardUrl(gestaoId, "lancamento-invalido"));
+  }
+
+  const denied = await guardMutateLancamento(
+    user.id,
+    gestaoId,
+    {
+      gestaoId,
+      lancamentoId: parsed.data.lancamentoId,
+      contaId: parsed.data.contaId,
+      categoriaId: parsed.data.tipo === "transferencia" ? null : parsed.data.categoriaId ?? null,
+      contaDestinoId: parsed.data.tipo === "transferencia" ? parsed.data.contaDestinoId : null,
+    },
+    inline,
+  );
+  if (denied) {
+    return denied;
   }
 
   const updated = await updateLancamento({
@@ -626,11 +743,14 @@ export async function deleteLancamentoAction(
     redirect("/dashboard?status=lancamento-invalido");
   }
 
-  if (!(await userCanMutateGestao(user.id, gestaoId))) {
-    if (inline) {
-      return { ok: false, error: "Voce nao tem permissao para excluir nesta gestao." };
-    }
-    redirect("/dashboard?status=acesso-negado");
+  const denied = await guardMutateLancamento(
+    user.id,
+    gestaoId,
+    { gestaoId, lancamentoId },
+    inline,
+  );
+  if (denied) {
+    return denied;
   }
 
   await deleteLancamentos({

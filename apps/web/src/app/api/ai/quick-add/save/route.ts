@@ -7,7 +7,11 @@ import {
 } from "@ltcashflow/validation";
 
 import { auth } from "@/lib/server/auth";
-import { userCanMutateGestao } from "@/lib/server/permissions";
+import {
+  gestaoAccessDeniedResponse,
+  requireFinancialRefsInGestaoApi,
+  requireMutateGestaoApi,
+} from "@/lib/server/gestao-api-guard";
 import {
   countSimilarLancamentosRecent,
   createLancamento,
@@ -341,14 +345,45 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Gestao obrigatoria." }, { status: 400 });
   }
 
-  if (!(await userCanMutateGestao(userId, gestaoId))) {
-    return NextResponse.json({ error: "Sem acesso a essa gestao." }, { status: 403 });
+  try {
+    await requireMutateGestaoApi(userId, gestaoId);
+  } catch (error) {
+    const denied = gestaoAccessDeniedResponse(error, {
+      userId,
+      gestaoId,
+      route: "/api/ai/quick-add/save",
+    });
+    if (denied) {
+      return denied;
+    }
+    throw error;
   }
 
   const single = parseSuggestion(body.suggestion);
 
   if (single.success) {
     const suggestion = withDefaultCurrentTime(single.data);
+
+    try {
+      await requireFinancialRefsInGestaoApi({
+        gestaoId,
+        contaId: suggestion.contaId,
+        categoriaId: suggestion.tipo === "transferencia" ? null : suggestion.categoriaId ?? null,
+        contaDestinoId: suggestion.contaDestinoId ?? null,
+      });
+    } catch (error) {
+      const denied = gestaoAccessDeniedResponse(error, {
+        userId,
+        gestaoId,
+        route: "/api/ai/quick-add/save",
+        entityId: suggestion.categoriaId ?? suggestion.contaId,
+      });
+      if (denied) {
+        return denied;
+      }
+      throw error;
+    }
+
     const semelhantes = await countSimilarLancamentosRecent({
       gestaoId,
       contaId: suggestion.contaId,
@@ -397,6 +432,27 @@ export async function POST(request: Request) {
 
   for (const item of batch.data.items) {
     const suggestion = withDefaultCurrentTime(item);
+
+    try {
+      await requireFinancialRefsInGestaoApi({
+        gestaoId,
+        contaId: suggestion.contaId,
+        categoriaId: suggestion.tipo === "transferencia" ? null : suggestion.categoriaId ?? null,
+        contaDestinoId: suggestion.contaDestinoId ?? null,
+      });
+    } catch (error) {
+      const denied = gestaoAccessDeniedResponse(error, {
+        userId,
+        gestaoId,
+        route: "/api/ai/quick-add/save",
+        entityId: suggestion.categoriaId ?? suggestion.contaId,
+      });
+      if (denied) {
+        return denied;
+      }
+      throw error;
+    }
+
     const semelhantes = await countSimilarLancamentosRecent({
       gestaoId,
       contaId: suggestion.contaId,

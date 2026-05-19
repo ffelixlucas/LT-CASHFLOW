@@ -3,7 +3,11 @@ import { NextResponse } from "next/server";
 import { deleteLancamentosSuggestionSchema } from "@ltcashflow/validation";
 
 import { auth } from "@/lib/server/auth";
-import { userCanMutateGestao } from "@/lib/server/permissions";
+import {
+  gestaoAccessDeniedResponse,
+  requireMutateGestaoApi,
+} from "@/lib/server/gestao-api-guard";
+import { assertLancamentoIdsInGestao } from "@/lib/server/permissions";
 import { deleteLancamentos } from "@/lib/server/repository";
 
 export async function POST(request: Request) {
@@ -21,14 +25,39 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Gestao obrigatoria." }, { status: 400 });
   }
 
-  if (!(await userCanMutateGestao(userId, gestaoId))) {
-    return NextResponse.json({ error: "Sem acesso a essa gestao." }, { status: 403 });
+  try {
+    await requireMutateGestaoApi(userId, gestaoId);
+  } catch (error) {
+    const denied = gestaoAccessDeniedResponse(error, {
+      userId,
+      gestaoId,
+      route: "/api/assistant/delete-lancamentos",
+    });
+    if (denied) {
+      return denied;
+    }
+    throw error;
   }
 
   const parsed = deleteLancamentosSuggestionSchema.safeParse(body.suggestion);
 
   if (!parsed.success) {
     return NextResponse.json({ error: "Sugestao de exclusao invalida." }, { status: 400 });
+  }
+
+  try {
+    await assertLancamentoIdsInGestao(parsed.data.lancamentoIds, gestaoId);
+  } catch (error) {
+    const denied = gestaoAccessDeniedResponse(error, {
+      userId,
+      gestaoId,
+      route: "/api/assistant/delete-lancamentos",
+      entityCount: parsed.data.lancamentoIds.length,
+    });
+    if (denied) {
+      return denied;
+    }
+    throw error;
   }
 
   const deleted = await deleteLancamentos({

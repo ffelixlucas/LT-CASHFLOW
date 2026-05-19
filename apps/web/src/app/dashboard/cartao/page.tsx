@@ -12,6 +12,10 @@ import { DashboardStack } from "@/components/dashboard/dashboard-stack";
 import { requireUser } from "@/lib/server/auth";
 import { timeServerAsync } from "@/lib/server/dashboard-server-timing";
 import {
+  parseRequestedGestaoId,
+  resolveGestaoAtivaForRead,
+} from "@/lib/server/gestao-read-page";
+import {
   countMovimentosFaturaCartaoConta,
   getResumoFaturaCartaoConta,
   listCategorias,
@@ -98,10 +102,8 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
 
   const params = await searchParams;
   const gestoes = await listUserGestoes(user.id);
-  const requestedGestaoId =
-    typeof params.gestao === "string" ? Number(params.gestao) : undefined;
-  const gestaoAtiva =
-    gestoes.find((item) => item.id === requestedGestaoId) ?? gestoes[0] ?? null;
+  const requestedGestaoId = parseRequestedGestaoId(params.gestao);
+  const gestaoAtiva = await resolveGestaoAtivaForRead(user.id, gestoes, requestedGestaoId);
 
   const [contas, categorias] = gestaoAtiva
     ? await Promise.all([listContas(gestaoAtiva.id), listCategorias(gestaoAtiva.id)])

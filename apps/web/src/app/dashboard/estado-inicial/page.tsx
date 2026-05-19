@@ -5,6 +5,10 @@ import { SignOutButton } from "@/components/auth/sign-out-button";
 import { DashboardAppNav } from "@/components/dashboard/dashboard-app-nav";
 import { requireUser } from "@/lib/server/auth";
 import { formatDateForDisplay } from "@/lib/date";
+import {
+  parseRequestedGestaoId,
+  resolveGestaoAtivaForRead,
+} from "@/lib/server/gestao-read-page";
 import { listContas, listUserGestoes } from "@/lib/server/repository";
 import { MoneyInput } from "@/components/ui/money-input";
 import { DateInput } from "@/components/ui/date-input";
@@ -40,8 +44,8 @@ export default async function EstadoInicialPage({ searchParams }: StatePageProps
 
   const params = await searchParams;
   const gestoes = await listUserGestoes(user.id);
-  const requestedGestaoId = typeof params.gestao === "string" ? Number(params.gestao) : undefined;
-  const gestaoAtiva = gestoes.find((item) => item.id === requestedGestaoId) ?? gestoes[0] ?? null;
+  const requestedGestaoId = parseRequestedGestaoId(params.gestao);
+  const gestaoAtiva = await resolveGestaoAtivaForRead(user.id, gestoes, requestedGestaoId);
 
   if (!gestaoAtiva) {
     redirect("/onboarding");

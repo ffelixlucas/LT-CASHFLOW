@@ -13,6 +13,15 @@ import { addCalendarMonths, buildMonthCalendarDate } from "@/lib/date";
 import { pool } from "@ltcashflow/db";
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 
+import {
+  assertLancamentoIdsInGestao,
+  ensureFinancialRefsInGestao,
+  type GestaoMemberRole,
+} from "@/lib/server/gestao-access";
+
+export type { GestaoMemberRole } from "@/lib/server/gestao-access";
+export { getUserGestaoRole, userHasGestaoAccess } from "@/lib/server/gestao-access";
+
 export type UserRow = RowDataPacket & {
   id: number;
   nome: string;
@@ -29,8 +38,6 @@ export type GestaoRow = RowDataPacket & {
   percentual_reserva: string | null;
   papel?: GestaoMemberRole;
 };
-
-export type GestaoMemberRole = "proprietario" | "administrador" | "editor" | "visualizador";
 
 export type ContaRow = RowDataPacket & {
   id: number;
@@ -548,41 +555,6 @@ export async function updateGestaoMembroPapel(input: {
   } finally {
     connection.release();
   }
-}
-
-export async function userHasGestaoAccess(userId: number, gestaoId: number) {
-  const [rows] = await pool.query<RowDataPacket[]>(
-    `
-      SELECT 1
-      FROM gestao_membros
-      WHERE usuario_id = ?
-        AND gestao_id = ?
-        AND status = 'ativo'
-      LIMIT 1
-    `,
-    [userId, gestaoId],
-  );
-
-  return rows.length > 0;
-}
-
-export async function getUserGestaoRole(
-  userId: number,
-  gestaoId: number,
-): Promise<GestaoMemberRole | null> {
-  const [rows] = await pool.query<Array<RowDataPacket & { papel: GestaoMemberRole }>>(
-    `
-      SELECT papel
-      FROM gestao_membros
-      WHERE usuario_id = ?
-        AND gestao_id = ?
-        AND status = 'ativo'
-      LIMIT 1
-    `,
-    [userId, gestaoId],
-  );
-
-  return rows[0]?.papel ?? null;
 }
 
 export async function createGestaoWithDefaults(input: {
@@ -1110,6 +1082,13 @@ export async function createLancamento(input: {
   competenciaHora?: string;
   vencimentoData?: string;
 }) {
+  await ensureFinancialRefsInGestao({
+    gestaoId: input.gestaoId,
+    contaId: input.contaId,
+    categoriaId: input.categoriaId ?? null,
+    contaDestinoId: input.contaDestinoId ?? null,
+  });
+
   if (input.tipo === "transferencia") {
     if (!input.contaDestinoId) {
       throw new Error("Conta destino obrigatoria para transferencia.");
@@ -1140,8 +1119,8 @@ export async function createLancamento(input: {
     let faturaCompetenciaResolved = input.faturaCompetenciaData || null;
     if (!faturaCompetenciaResolved && input.tipo === "despesa") {
       const [contaRows] = await connection.query<Array<RowDataPacket & { tipo: string; fechamento_dia: number | null }>>(
-        `SELECT tipo, fechamento_dia FROM contas WHERE id = ? LIMIT 1`,
-        [input.contaId],
+        `SELECT tipo, fechamento_dia FROM contas WHERE id = ? AND gestao_id = ? LIMIT 1`,
+        [input.contaId, input.gestaoId],
       );
       const contaInfo = contaRows[0];
       if (contaInfo && contaInfo.tipo === "cartao_credito") {
@@ -1240,6 +1219,12 @@ export async function createParcelamentoNoCartao(input: {
   primeiraCompetenciaData: string;
   competenciaHora?: string | null;
 }): Promise<{ ids: number[] }> {
+  await ensureFinancialRefsInGestao({
+    gestaoId: input.gestaoId,
+    contaId: input.contaId,
+    categoriaId: input.categoriaId,
+  });
+
   const connection = await pool.getConnection();
 
   try {
@@ -1537,6 +1522,12 @@ export async function createGastoFixo(input: {
   meio?: LancamentoMeio;
   anoMes: string;
 }) {
+  await ensureFinancialRefsInGestao({
+    gestaoId: input.gestaoId,
+    contaId: input.contaId,
+    categoriaId: input.categoriaId,
+  });
+
   const [result] = await pool.query<ResultSetHeader>(
     `
       INSERT INTO gastos_fixos (
@@ -2267,6 +2258,12 @@ export async function createTransferencia(input: {
   competenciaHora?: string;
   vencimentoData?: string;
 }) {
+  await ensureFinancialRefsInGestao({
+    gestaoId: input.gestaoId,
+    contaId: input.contaOrigemId,
+    contaDestinoId: input.contaDestinoId,
+  });
+
   const connection = await pool.getConnection();
 
   try {
@@ -3001,6 +2998,14 @@ export async function updateLancamento(input: {
   competenciaHora?: string;
   vencimentoData?: string;
 }) {
+  await ensureFinancialRefsInGestao({
+    gestaoId: input.gestaoId,
+    lancamentoId: input.lancamentoId,
+    contaId: input.contaId,
+    categoriaId: input.categoriaId ?? null,
+    contaDestinoId: input.contaDestinoId ?? null,
+  });
+
   const connection = await pool.getConnection();
 
   const isTransferencia = input.tipo === "transferencia";
@@ -4153,6 +4158,8 @@ export async function updateLancamentosMeio(input: {
     return 0;
   }
 
+  await assertLancamentoIdsInGestao(input.lancamentoIds, input.gestaoId);
+
   const placeholders = input.lancamentoIds.map(() => "?").join(", ");
   const [result] = await pool.query<ResultSetHeader>(
     `
@@ -4175,6 +4182,8 @@ export async function updateLancamentosCompetenciaData(input: {
   if (input.lancamentoIds.length === 0) {
     return 0;
   }
+
+  await assertLancamentoIdsInGestao(input.lancamentoIds, input.gestaoId);
 
   const placeholders = input.lancamentoIds.map(() => "?").join(", ");
   const [result] = await pool.query<ResultSetHeader>(
