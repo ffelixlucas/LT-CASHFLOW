@@ -21,6 +21,7 @@
     "docs:redesign-spec": "node scripts/generate-redesign-spec-docx.cjs"
   },
   "devDependencies": {
-    "docx": "^9.6.1"
+    "docx": "^9.6.1",
+    "mysql2": "^3.20.0"
   }
 }
