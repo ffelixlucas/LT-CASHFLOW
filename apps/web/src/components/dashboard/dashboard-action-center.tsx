@@ -136,7 +136,7 @@ function DashboardModal({
   return (
     <div
       aria-modal="true"
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 px-0 py-0 sm:px-4 sm:py-8"
+      className="fixed inset-0 z-[80] flex items-end justify-center bg-black/40 px-0 py-0 sm:px-4 sm:py-8"
       role="dialog"
     >
       <div
@@ -400,13 +400,13 @@ export function DashboardActionCenter({
       {menuOpen && gestaoId ? (
         <button
           aria-label="Fechar acoes rapidas"
-          className="fixed inset-0 z-[58] cursor-default bg-black/25"
+          className="fixed inset-0 z-[69] cursor-default bg-black/25"
           onClick={() => setMenuOpen(false)}
           type="button"
         />
       ) : null}
 
-      <div className="fixed right-4 bottom-4 z-[60] flex flex-col items-end gap-2 sm:right-6 sm:bottom-6">
+      <div className="fixed right-56 bottom-24 z-[70] flex flex-col items-end gap-2 sm:right-60 sm:bottom-28">
         {menuOpen && gestaoId ? (
           <nav
             aria-label="Acoes rapidas"
