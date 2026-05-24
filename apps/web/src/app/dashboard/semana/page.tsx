@@ -460,9 +460,9 @@ export default async function FechamentoSemanaPage({ searchParams }: SemanaPageP
           <section className="rounded-[1.4rem] border border-line bg-surface p-4 sm:p-5">
             <h2 className="font-heading text-lg font-semibold">Fechar a semana</h2>
             <p className="mt-2 text-sm text-muted leading-relaxed">
-              Preencha <strong>fatura paga na corrente</strong> e <strong>reservas</strong>. Ao fechar, o LT grava o
-              snapshot e cria os lançamentos no extrato (Liquidez atualiza). A conferência usa o modelo do caderno:
-              resultado da semana − fatura − reservas = saldo em caixa.
+              Preencha <strong>quanto saiu da corrente para o cartão</strong> e <strong>reservas</strong>. Ao fechar,
+              o LT grava o snapshot e cria os lançamentos no extrato (Liquidez atualiza). A conferência usa o modelo
+              do caderno: resultado da semana − reservas = saldo em caixa.
             </p>
 
             <FecharSemanaForm

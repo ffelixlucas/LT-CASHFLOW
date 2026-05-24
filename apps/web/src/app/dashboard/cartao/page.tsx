@@ -4,11 +4,11 @@ import { redirect } from "next/navigation";
 
 import { normalizeFaturaMesKey, resolveFaturaCompetenciaAberta } from "@ltcashflow/finance-core";
 
-import { CartaoMovimentosList } from "@/app/dashboard/cartao/cartao-movimentos-list";
 import { FaturaMesSelectForm } from "@/app/dashboard/cartao/fatura-mes-select-form";
 import { DashboardPageHeader } from "@/components/dashboard/dashboard-page-header";
 import { DashboardPageShell } from "@/components/dashboard/dashboard-page-shell";
 import { DashboardStack } from "@/components/dashboard/dashboard-stack";
+import { RecentLancamentosTable } from "@/components/dashboard/recent-lancamentos-table";
 import { requireUser } from "@/lib/server/auth";
 import { timeServerAsync } from "@/lib/server/dashboard-server-timing";
 import {
@@ -16,7 +16,6 @@ import {
   resolveGestaoAtivaForRead,
 } from "@/lib/server/gestao-read-page";
 import {
-  countMovimentosFaturaCartaoConta,
   getResumoFaturaCartaoConta,
   listCategorias,
   listContas,
@@ -59,16 +58,6 @@ function parseFaturaQuery(raw: string | string[] | undefined): string | null {
   }
 
   return null;
-}
-
-function parsePositiveInt(raw: string | string[] | undefined, fallback = 1) {
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    return fallback;
-  }
-
-  return Math.floor(parsed);
 }
 
 function montarHrefCartao(input: {
@@ -137,12 +126,9 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
   let resumoFatura = null;
   let movimentos: MovimentoFaturaCartao[] = [];
   let totalMovimentos = 0;
-  const movimentosPorPagina = 14;
-  const paginaMovimentos = parsePositiveInt(params.pagina);
-  const offsetMovimentos = (paginaMovimentos - 1) * movimentosPorPagina;
 
   if (gestaoAtiva && contaCartaoAtiva) {
-    const [distinct, res, movs, totalMovs] = await timeServerAsync("dashboard/cartao/data", () =>
+    const [distinct, res, movs] = await timeServerAsync("dashboard/cartao/data", () =>
       Promise.all([
         listFaturaMesKeysParaCartaoConta({
           gestaoId: gestaoAtiva.id,
@@ -159,13 +145,6 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
           gestaoId: gestaoAtiva.id,
           contaCartaoId: contaCartaoAtiva.id,
           faturaCompetenciaData: faturaSelecionada,
-          limit: movimentosPorPagina,
-          offset: offsetMovimentos,
-        }),
-        countMovimentosFaturaCartaoConta({
-          gestaoId: gestaoAtiva.id,
-          contaCartaoId: contaCartaoAtiva.id,
-          faturaCompetenciaData: faturaSelecionada,
         }),
       ]),
     );
@@ -174,21 +153,7 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
     faturaMesKeys = [...opcaoSet].sort((a, b) => b.localeCompare(a));
     resumoFatura = res;
     movimentos = movs;
-    totalMovimentos = totalMovs;
-  }
-
-  const totalPaginasMovimentos = Math.max(1, Math.ceil(totalMovimentos / movimentosPorPagina));
-  const paginaMovimentosSegura = Math.min(paginaMovimentos, totalPaginasMovimentos);
-
-  if (gestaoAtiva && contaCartaoAtiva && paginaMovimentos > totalPaginasMovimentos && totalMovimentos > 0) {
-    redirect(
-      montarHrefCartao({
-        gestaoId: gestaoAtiva.id,
-        contaId: contaCartaoAtiva.id,
-        fatura: faturaSelecionada,
-        pagina: totalPaginasMovimentos,
-      }),
-    );
+    totalMovimentos = movs.length;
   }
 
   const idxFatura =
@@ -223,6 +188,30 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
     contaCartaoAtiva?.vencimento_dia !== undefined && contaCartaoAtiva.vencimento_dia !== null
       ? `Dia ${contaCartaoAtiva.vencimento_dia}`
       : "—";
+  const contaTipoById = new Map(contas.map((conta) => [conta.id, conta.tipo]));
+  const movimentosComoLancamentos = movimentos.map((movimento) => ({
+    id: movimento.id,
+    conta_id: movimento.conta_id,
+    conta_tipo: contaTipoById.get(movimento.conta_id) ?? "outro",
+    conta_destino_id: null,
+    conta_destino_tipo: null,
+    categoria_id: movimento.categoria_id,
+    tipo: "despesa",
+    status: movimento.status,
+    meio: movimento.meio,
+    descricao:
+      movimento.descricao?.trim() ||
+      `${movimento.tipo === "pagamento" ? "Pagamento de fatura" : "Compra no cartão"} #${movimento.id}`,
+    valor_total: String(movimento.valor_total),
+    competencia_data: movimento.competencia_data,
+    fatura_competencia_data: movimento.fatura_competencia_data,
+    data_compra: movimento.tipo === "compra" ? movimento.competencia_data : null,
+    competencia_hora: movimento.competencia_hora,
+    vencimento_data: movimento.vencimento_data,
+    categoria_nome: movimento.categoria_nome || null,
+    conta_nome: movimento.conta_nome,
+    conta_destino_nome: null,
+  }));
 
   return (
     <DashboardPageShell>
@@ -351,41 +340,14 @@ export default async function DashboardCartaoPage({ searchParams }: CartaoPagePr
                   {movimentos.length === 0 ? (
                     <p className="muted">Nenhum lançamento nesta fatura.</p>
                   ) : (
-                    <CartaoMovimentosList
-                      categorias={categorias.map((categoria) => ({
-                        id: categoria.id,
-                        nome: categoria.nome,
-                      }))}
-                      contas={contas.map((conta) => ({
-                        id: conta.id,
-                        nome: conta.nome,
-                        tipo: conta.tipo,
-                      }))}
+                    <RecentLancamentosTable
+                      categorias={categorias}
+                      contas={contas}
                       gestaoId={gestaoAtiva.id}
-                      hrefAnterior={
-                        paginaMovimentosSegura > 1
-                          ? montarHrefCartao({
-                              gestaoId: gestaoAtiva.id,
-                              contaId: contaCartaoAtiva.id,
-                              fatura: faturaSelecionada,
-                              pagina: paginaMovimentosSegura - 1,
-                            })
-                          : undefined
-                      }
-                      hrefProxima={
-                        paginaMovimentosSegura < totalPaginasMovimentos
-                          ? montarHrefCartao({
-                              gestaoId: gestaoAtiva.id,
-                              contaId: contaCartaoAtiva.id,
-                              fatura: faturaSelecionada,
-                              pagina: paginaMovimentosSegura + 1,
-                            })
-                          : undefined
-                      }
-                      movimentos={movimentos}
-                      paginaAtual={paginaMovimentosSegura}
-                      totalMovimentos={totalMovimentos}
-                      totalPaginas={totalPaginasMovimentos}
+                      groupByDate="competencia"
+                      lancamentos={movimentosComoLancamentos}
+                      showGroupBalance={false}
+                      showSummaryCards={false}
                     />
                   )}
                 </section>

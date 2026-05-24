@@ -55,6 +55,7 @@ type LancamentoItem = {
 };
 
 type PeriodFilter = "all" | "today" | "last7" | "month" | "custom";
+type GroupByDate = "recorte" | "competencia";
 const PAGE_SIZE = 30;
 
 function money(value: string | number | null | undefined) {
@@ -140,13 +141,17 @@ function formatLocalIsoDate(date: Date) {
 }
 
 /** Data do mês de gestão (fatura no cartão, senão competência). */
-function dataRecorteMensalList(item: LancamentoItem) {
+function dataRecorteMensalList(item: LancamentoItem, groupByDate: GroupByDate = "recorte") {
+  if (groupByDate === "competencia") {
+    return item.competencia_data;
+  }
+
   return item.fatura_competencia_data ?? item.competencia_data;
 }
 
-function compareLancamentosChrono(a: LancamentoItem, b: LancamentoItem) {
-  const da = dataRecorteMensalList(a);
-  const db = dataRecorteMensalList(b);
+function compareLancamentosChrono(a: LancamentoItem, b: LancamentoItem, groupByDate: GroupByDate = "recorte") {
+  const da = dataRecorteMensalList(a, groupByDate);
+  const db = dataRecorteMensalList(b, groupByDate);
   if (da !== db) {
     return da.localeCompare(db);
   }
@@ -509,6 +514,7 @@ export function RecentLancamentosTable({
   showFiltersSummary = true,
   showGroupBalance = true,
   showSummaryCards = true,
+  groupByDate = "recorte",
 }: {
   gestaoId: number;
   contas: ContaOption[];
@@ -519,6 +525,7 @@ export function RecentLancamentosTable({
   showFiltersSummary?: boolean;
   showGroupBalance?: boolean;
   showSummaryCards?: boolean;
+  groupByDate?: GroupByDate;
 }) {
   const [selectedLancamentoId, setSelectedLancamentoId] = useState<number | null>(null);
   const [expandedLancamentoId, setExpandedLancamentoId] = useState<number | null>(null);
@@ -663,7 +670,7 @@ export function RecentLancamentosTable({
         return false;
       }
 
-      const dataRecorteMensal = dataRecorteMensalList(item);
+      const dataRecorteMensal = dataRecorteMensalList(item, groupByDate);
       if (normalizedDateFrom && dataRecorteMensal < normalizedDateFrom) {
         return false;
       }
@@ -691,7 +698,7 @@ export function RecentLancamentosTable({
 
       return searchable.includes(normalizedSearch);
     });
-  }, [categoriaFilter, contaFilter, dateFrom, dateTo, lancamentos, meioFilter, search, statusFilter, tipoFilter]);
+  }, [categoriaFilter, contaFilter, dateFrom, dateTo, groupByDate, lancamentos, meioFilter, search, statusFilter, tipoFilter]);
 
   const filteredSummary = useMemo(() => {
     // Para o resumo de fluxo "líquido", só contam eventos que tocam a conta corrente
@@ -728,7 +735,7 @@ export function RecentLancamentosTable({
     const runningByDate = new Map<string, number>();
     let running = saldoInicialDisponivel;
 
-    for (const item of [...filteredLancamentos].sort(compareLancamentosChrono)) {
+    for (const item of [...filteredLancamentos].sort((a, b) => compareLancamentosChrono(a, b, groupByDate))) {
       if (item.is_abertura) {
         runningByDate.set(item.competencia_data, running);
         continue;
@@ -754,7 +761,7 @@ export function RecentLancamentosTable({
     }
 
     return runningByDate;
-  }, [filteredLancamentos, saldoInicialDisponivel]);
+  }, [filteredLancamentos, groupByDate, saldoInicialDisponivel]);
 
   const groupedLancamentos = useMemo(() => {
     const groups: Array<{
@@ -782,9 +789,9 @@ export function RecentLancamentosTable({
                 ? transferenciaSignedValue(item)
                 : 0;
 
-      if (!lastGroup || lastGroup.date !== dataRecorteMensalList(item)) {
+      if (!lastGroup || lastGroup.date !== dataRecorteMensalList(item, groupByDate)) {
         groups.push({
-          date: dataRecorteMensalList(item),
+          date: dataRecorteMensalList(item, groupByDate),
           items: [item],
           saldo: itemSaldo,
           saldoFinal: saldoPorDia.get(item.competencia_data) ?? itemSaldo,
@@ -798,7 +805,7 @@ export function RecentLancamentosTable({
     }
 
     return groups;
-  }, [paginatedLancamentos, saldoPorDia]);
+  }, [groupByDate, paginatedLancamentos, saldoPorDia]);
 
   const activeFilters = useMemo(() => {
     const items: Array<{ key: string; label: string; clear: () => void }> = [];
@@ -1455,12 +1462,8 @@ export function RecentLancamentosTable({
       {selectedLancamento ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/35 px-4 py-8"
-          onClick={() => setSelectedLancamentoId(null)}
         >
-          <div
-            className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-[2rem] border border-line bg-surface p-6 shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-[2rem] border border-line bg-surface p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.18em] text-muted">Editar lancamento</p>

@@ -5332,7 +5332,15 @@ export async function createFechamentoSemanal(input: {
           apenas_snapshot,
           lancamento_reserva_id, observacoes
         )
-        VALUES (?, 'semanal', ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (
+          ?, 'semanal', ?, ?,
+          NOW(), ?,
+          ?, ?, ?,
+          ?, ?, ?, ?,
+          ?, ?,
+          ?,
+          ?, ?
+        )
         ON DUPLICATE KEY UPDATE
           fechado_em = NOW(),
           fechado_por_usuario_id = VALUES(fechado_por_usuario_id),

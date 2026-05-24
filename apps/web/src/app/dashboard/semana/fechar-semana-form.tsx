@@ -59,9 +59,6 @@ export function FecharSemanaForm({
   action,
 }: FecharSemanaFormProps) {
   const [cartaoStr, setCartaoStr] = useState(comprasCartaoSemana.toFixed(2));
-  const [faturaStr, setFaturaStr] = useState(
-    pagamentoFaturaSugerido > 0 ? pagamentoFaturaSugerido.toFixed(2) : "",
-  );
   const [reservas, setReservas] = useState<Record<number, string>>(() =>
     Object.fromEntries(reservasDisponiveis.map((c) => [c.id, "0.00"])),
   );
@@ -69,13 +66,13 @@ export function FecharSemanaForm({
   const [contaOrigemId, setContaOrigemId] = useState(() => contaOrigemPadraoId ?? contasCorrente[0]?.id ?? 0);
 
   const cartao = parseNumber(cartaoStr);
-  const pagamentoFatura = parseNumber(faturaStr);
+  const pagamentoFatura = cartao;
   const reservasArr = reservasDisponiveis.map((c) => ({ ...c, valor: parseNumber(reservas[c.id] ?? "0") }));
   const totalReserva = reservasArr.reduce((acc, r) => acc + r.valor, 0);
   const contasReservaPreenchidas = reservasArr.filter((r) => r.valor > 0);
 
   const sobraOperacional = entradasSemana - saidasCorrenteSemana - cartao;
-  const sobraEmCaixa = sobraOperacional - pagamentoFatura - totalReserva;
+  const sobraEmCaixa = sobraOperacional - totalReserva;
   const sobraTipo =
     Math.abs(sobraEmCaixa) < 0.005 ? "zerada" : sobraEmCaixa > 0 ? "aporte" : "resgate";
   const sobraAbs = Math.round(Math.abs(sobraEmCaixa) * 100) / 100;
@@ -104,6 +101,7 @@ export function FecharSemanaForm({
       <input type="hidden" name="inicio" value={inicio} />
       <input type="hidden" name="fim" value={fim} />
       <input type="hidden" name="comprasCartaoRegistro" value={cartao.toFixed(2)} />
+      <input type="hidden" name="pagamentoFatura" value={pagamentoFatura.toFixed(2)} />
       <input type="hidden" name="contaCorrenteId" value={contaOrigemId || ""} />
       <input type="hidden" name="reservarValorTotal" value={totalReserva.toFixed(2)} />
       <input type="hidden" name="apenasSnapshot" value={apenasSnapshot ? "on" : ""} />
@@ -132,13 +130,13 @@ export function FecharSemanaForm({
       <input type="hidden" name="detalhesReserva" value={detalhesReserva} />
 
       <article className="rounded-[1.2rem] border border-line bg-background/60 p-4">
-        <StepHeader n={1} title="Cartão — gasto da semana" />
+        <StepHeader n={1} title="Cartão — pago na semana" />
         <p className="mt-2 text-sm text-muted leading-relaxed">
-          Compras no cartão com data nesta semana (registro no snapshot). Não é o pagamento da fatura na
-          corrente.
+          Valor que saiu da corrente para o cartão neste fechamento. O LT salva esse valor no snapshot e cria o
+          lançamento de pagamento de fatura no extrato para atualizar a Liquidez.
         </p>
         <label className="mt-3 block max-w-xs">
-          <span className="block text-xs uppercase tracking-[0.18em] text-muted">Gasto no cartão (registro)</span>
+          <span className="block text-xs uppercase tracking-[0.18em] text-muted">Pagamento do cartão</span>
           <input
             type="number"
             step="0.01"
@@ -149,38 +147,16 @@ export function FecharSemanaForm({
             className="mt-1 w-full rounded-2xl border border-line bg-background px-4 py-3 text-sm outline-none transition focus:border-foreground"
           />
         </label>
-      </article>
-
-      <article className="rounded-[1.2rem] border border-line bg-background/60 p-4">
-        <StepHeader n={2} title="Fatura — pagamento na corrente" />
-        <p className="mt-2 text-sm text-muted leading-relaxed">
-          Quanto <strong className="text-foreground">saiu da corrente</strong> para pagar a fatura neste
-          fechamento. O LT cria o lançamento no extrato (atualiza a{" "}
-          <strong className="text-foreground">Liquidez</strong>).
-        </p>
-        <label className="mt-3 block max-w-xs">
-          <span className="block text-xs uppercase tracking-[0.18em] text-muted">Pagamento de fatura</span>
-          <input
-            type="number"
-            step="0.01"
-            min="0"
-            name="pagamentoFatura"
-            autoComplete="off"
-            value={faturaStr}
-            onChange={(e) => setFaturaStr(e.target.value)}
-            placeholder="0,00"
-            className="mt-1 w-full rounded-2xl border border-line bg-background px-4 py-3 text-sm outline-none transition focus:border-foreground"
-          />
-        </label>
         {pagamentoFaturaSugerido > 0 ? (
           <p className="mt-2 text-xs text-muted">
-            Sugestão do extrato nesta semana: {moedaBR(pagamentoFaturaSugerido)} (ajuste se pagou outro valor).
+            Já existe no extrato desta semana: {moedaBR(pagamentoFaturaSugerido)} em pagamento de fatura.
+            Confira para não registrar em duplicidade.
           </p>
         ) : null}
       </article>
 
       <article className="rounded-[1.2rem] border border-line bg-background/60 p-4">
-        <StepHeader n={3} title="Reservas — quanto guardou em cada" />
+        <StepHeader n={2} title="Reservas — quanto guardou em cada" />
         <p className="mt-2 text-sm text-muted leading-relaxed">
           Aplicações da corrente para poupança neste fechamento. O LT registra uma transferência por reserva
           com valor maior que zero.
@@ -190,7 +166,6 @@ export function FecharSemanaForm({
           sobraTipo={sobraTipo}
           sobraAbs={sobraAbs}
           sobraOperacional={sobraOperacional}
-          pagamentoFatura={pagamentoFatura}
           totalReserva={totalReserva}
           className={sobraBoxClass}
         />
@@ -247,24 +222,24 @@ export function FecharSemanaForm({
         <p className="mt-1 text-base leading-relaxed">
           {sobraTipo === "zerada" ? (
             <>
-              Corrente <strong className="text-emerald-700">fecha zerada</strong> com fatura + reservas
-              informadas. Pode prosseguir.
+              Corrente <strong className="text-emerald-700">fecha zerada</strong> com pagamento do cartão e
+              reservas informadas. Pode prosseguir.
             </>
           ) : sobraTipo === "aporte" ? (
             <>
               Ainda sobrariam <strong className="text-amber-800">{moedaBR(sobraAbs)}</strong> na corrente —
-              ajuste fatura ou reservas, ou prossiga se for intencional.
+              ajuste o pagamento do cartão ou reservas, ou prossiga se for intencional.
             </>
           ) : (
             <>
               Faltam <strong className="text-rose-700">{moedaBR(sobraAbs)}</strong> na corrente para bater com
-              o que você moveu no banco. Revise fatura e reservas.
+              o que você moveu no banco. Revise pagamento do cartão e reservas.
             </>
           )}
         </p>
         <p className="mt-2 text-xs text-muted leading-relaxed">
-          Resultado da semana {moedaBR(sobraOperacional)} − fatura {moedaBR(pagamentoFatura)} − reservas{" "}
-          {moedaBR(totalReserva)} = {moedaBR(sobraEmCaixa)} na corrente.
+          Resultado da semana {moedaBR(sobraOperacional)} − reservas {moedaBR(totalReserva)} ={" "}
+          {moedaBR(sobraEmCaixa)} na corrente.
         </p>
       </article>
 
@@ -277,7 +252,7 @@ export function FecharSemanaForm({
         />
         <span className="text-sm leading-snug">
           <strong className="text-foreground">Já fiz tudo no banco antes</strong> — marca que o Pix já saiu no
-          Inter; o LT ainda registra fatura e reservas aqui para o extrato e a Liquidez ficarem corretos.
+          Inter; o LT ainda registra pagamento do cartão e reservas aqui para o extrato e a Liquidez ficarem corretos.
         </span>
       </label>
 
@@ -286,7 +261,7 @@ export function FecharSemanaForm({
         <textarea
           name="observacoes"
           rows={2}
-          placeholder="ex.: paguei a fatura em um único Pix; guardei 10% na objetivo..."
+          placeholder="ex.: paguei o cartão em um único Pix; guardei 10% na objetivo..."
           className="mt-2 w-full rounded-2xl border border-line bg-background px-4 py-3 text-sm outline-none focus:border-foreground"
         />
       </label>
@@ -299,7 +274,7 @@ export function FecharSemanaForm({
           Fechar semana
         </button>
         <p className="text-xs text-muted max-w-md">
-          Grava o snapshot e registra no extrato: pagamento de fatura (se informado) e uma transferência por
+          Grava o snapshot e registra no extrato: pagamento do cartão e uma transferência por
           reserva preenchida.
         </p>
       </div>
@@ -311,14 +286,12 @@ function SobraEmCaixaBox({
   sobraTipo,
   sobraAbs,
   sobraOperacional,
-  pagamentoFatura,
   totalReserva,
   className,
 }: {
   sobraTipo: "zerada" | "aporte" | "resgate";
   sobraAbs: number;
   sobraOperacional: number;
-  pagamentoFatura: number;
   totalReserva: number;
   className: string;
 }) {
@@ -331,8 +304,7 @@ function SobraEmCaixaBox({
         {sobraTipo === "resgate" ? `− ${moedaBR(sobraAbs)}` : moedaBR(sobraAbs)}
       </p>
       <p className="mt-1 text-xs text-muted leading-relaxed">
-        Resultado da semana {moedaBR(sobraOperacional)} − fatura {moedaBR(pagamentoFatura)} − reservas{" "}
-        {moedaBR(totalReserva)}.
+        Resultado da semana {moedaBR(sobraOperacional)} − reservas {moedaBR(totalReserva)}.
       </p>
     </div>
   );

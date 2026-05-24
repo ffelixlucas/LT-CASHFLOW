@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { type ReactNode, useEffect, useState } from "react";
 
 import {
@@ -178,6 +178,8 @@ export function DashboardActionCenter({
   contas: ContaOption[];
   categorias: CategoriaOption[];
 }) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const router = useRouter();
   const [openModal, setOpenModal] = useState<ModalKey>(null);
   const [statementContaId, setStatementContaId] = useState<number | null>(contas[0]?.id ?? null);
@@ -195,6 +197,7 @@ export function DashboardActionCenter({
   const selectedStatementConta = contas.find((conta) => conta.id === statementContaId) ?? null;
   const statementContaIsCredit = selectedStatementConta?.tipo === "cartao_credito";
   const selectedCategory = categorias.find((categoria) => categoria.id === selectedCategoryId) ?? null;
+  const currentDashboardPath = `${pathname ?? "/dashboard"}${searchParams.size ? `?${searchParams.toString()}` : ""}`;
 
   const closeModal = () => setOpenModal(null);
   const openAction = (key: Exclude<ModalKey, null>) => {
@@ -827,6 +830,7 @@ export function DashboardActionCenter({
             onSubmitCapture={(event) => rememberLaunchDraft(event.currentTarget)}
           >
             <input name="gestaoId" type="hidden" value={gestaoId} />
+            <input name="returnTo" type="hidden" value={currentDashboardPath} />
             <input
               className="rounded-2xl border border-line bg-background px-4 py-3 md:col-span-2"
               name="descricao"
@@ -902,9 +906,9 @@ export function DashboardActionCenter({
                 value={launchDraft.contaDestinoId ?? ""}
                 required
               >
-                <option value="">Conta destino (poupanca ou investimento)</option>
+                <option value="">Conta destino</option>
                 {contas
-                  .filter((conta) => conta.tipo === "poupanca" || conta.tipo === "investimento")
+                  .filter((conta) => conta.id !== launchDraft.contaId)
                   .map((conta) => (
                     <option key={conta.id} value={conta.id}>
                       {conta.nome}
@@ -1036,7 +1040,8 @@ export function DashboardActionCenter({
             )}
 
             <p className="rounded-2xl border border-line bg-background px-4 py-3 text-sm text-muted md:col-span-2">
-              Transferencia / Aplicacao move dinheiro entre contas. Ela nao entra como despesa. Para porquinho ou investimento, escolha esse tipo e informe a conta destino.
+              Transferencia / Aplicacao move dinheiro entre contas. Ela nao entra como despesa. Use para aplicar,
+              resgatar do porquinho ou mover valor entre contas.
             </p>
 
             <div className="mt-2 flex justify-end md:col-span-2">
@@ -1135,10 +1140,10 @@ export function DashboardActionCenter({
       </DashboardModal>
 
       <DashboardModal
-        description="Use para mandar valor da conta corrente para poupança ou investimento sem virar despesa. Se quiser apenas mover entre contas, funciona do mesmo jeito."
+        description="Use para mover dinheiro entre contas sem virar despesa: aplicação, resgate do porquinho ou ajuste entre origens."
         onClose={closeModal}
         open={openModal === "transferencia"}
-        title="Nova aplicacao"
+        title="Nova transferencia"
       >
         {gestaoId ? (
           <form action={createTransferenciaAction} className="grid gap-3 md:grid-cols-2">
@@ -1146,7 +1151,7 @@ export function DashboardActionCenter({
             <input
               className="rounded-2xl border border-line bg-background px-4 py-3 md:col-span-2"
               name="descricao"
-              placeholder="Ex.: Aplicacao CDB Porquinho"
+              placeholder="Ex.: Resgate Dia a Dia para pagar cartão"
               required
             />
             <select
@@ -1166,14 +1171,12 @@ export function DashboardActionCenter({
               name="contaDestinoId"
               required
             >
-              <option value="">Conta destino (poupanca ou investimento)</option>
-              {contas
-                .filter((conta) => conta.tipo === "poupanca" || conta.tipo === "investimento")
-                .map((conta) => (
-                  <option key={conta.id} value={conta.id}>
-                    {conta.nome}
-                  </option>
-                ))}
+              <option value="">Conta destino</option>
+              {contas.map((conta) => (
+                <option key={conta.id} value={conta.id}>
+                  {conta.nome}
+                </option>
+              ))}
             </select>
             <select
               className="rounded-2xl border border-line bg-background px-4 py-3"

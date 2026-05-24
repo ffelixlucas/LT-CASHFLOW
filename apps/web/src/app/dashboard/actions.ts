@@ -62,6 +62,32 @@ function dashboardUrl(gestaoId?: number, status?: string) {
   return query ? `/dashboard?${query}` : "/dashboard";
 }
 
+function dashboardReturnUrl(formData: FormData, gestaoId: number, status: string) {
+  const rawReturnTo = formData.get("returnTo");
+
+  if (typeof rawReturnTo !== "string" || !rawReturnTo.startsWith("/dashboard") || rawReturnTo.startsWith("//")) {
+    return dashboardUrl(gestaoId, status);
+  }
+
+  try {
+    const url = new URL(rawReturnTo, "http://ltcashflow.local");
+
+    if (!url.pathname.startsWith("/dashboard")) {
+      return dashboardUrl(gestaoId, status);
+    }
+
+    if (!url.searchParams.has("gestao")) {
+      url.searchParams.set("gestao", String(gestaoId));
+    }
+    url.searchParams.set("status", status);
+
+    const query = url.searchParams.toString();
+    return `${url.pathname}${query ? `?${query}` : ""}${url.hash}`;
+  } catch {
+    return dashboardUrl(gestaoId, status);
+  }
+}
+
 function stateUrl(gestaoId?: number, status?: string) {
   const search = new URLSearchParams();
 
@@ -452,6 +478,7 @@ export async function gerarPrevistosPlanoFixosMesAction(payload: unknown) {
 export async function createLancamentoAction(formData: FormData) {
   const user = await getAuthenticatedUser();
   const gestaoId = Number(formData.get("gestaoId"));
+  const redirectTo = (status: string) => dashboardReturnUrl(formData, gestaoId, status);
   const competenciaData = normalizeDateInput(formData.get("competenciaData"));
   const faturaCompetenciaData = normalizeDateInput(formData.get("faturaCompetenciaData"));
   const competenciaHora = normalizeTimeInput(formData.get("competenciaHora"));
@@ -461,7 +488,7 @@ export async function createLancamentoAction(formData: FormData) {
     const tipo = String(formData.get("tipo") ?? "");
     const meio = String(formData.get("meio") ?? "");
     if (tipo !== "despesa" || meio !== "credito" || !competenciaData) {
-      redirect(dashboardUrl(gestaoId, "parcelamento-invalido"));
+      redirect(redirectTo("parcelamento-invalido"));
     }
 
     const parcelParsed = createParcelamentoCartaoSchema.safeParse({
@@ -476,7 +503,7 @@ export async function createLancamentoAction(formData: FormData) {
     });
 
     if (!parcelParsed.success) {
-      redirect(dashboardUrl(gestaoId, "parcelamento-invalido"));
+      redirect(redirectTo("parcelamento-invalido"));
     }
 
     await guardMutateFinancialRefs(user.id, gestaoId, {
@@ -492,13 +519,13 @@ export async function createLancamentoAction(formData: FormData) {
         ...parcelParsed.data,
       });
     } catch {
-      redirect(dashboardUrl(gestaoId, "parcelamento-invalido"));
+      redirect(redirectTo("parcelamento-invalido"));
     }
 
     revalidatePath("/dashboard");
     revalidatePath("/dashboard/meses");
     revalidatePath("/dashboard/cartao");
-    redirect(dashboardUrl(gestaoId, "parcelamento-criado"));
+    redirect(redirectTo("parcelamento-criado"));
   }
 
   const parsed = createLancamentoSchema.safeParse({
@@ -517,7 +544,7 @@ export async function createLancamentoAction(formData: FormData) {
   });
 
   if (!parsed.success) {
-    redirect(dashboardUrl(gestaoId, "lancamento-invalido"));
+    redirect(redirectTo("lancamento-invalido"));
   }
 
   await guardMutateFinancialRefs(user.id, gestaoId, {
@@ -536,7 +563,7 @@ export async function createLancamentoAction(formData: FormData) {
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/meses");
   revalidatePath("/dashboard/cartao");
-  redirect(dashboardUrl(gestaoId, "lancamento-criado"));
+  redirect(redirectTo("lancamento-criado"));
 }
 
 export async function createParcelamentoCartaoAction(formData: FormData) {

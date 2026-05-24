@@ -20,31 +20,31 @@ async function HomeContent() {
             <Link className="inline-block" href="/" aria-label="LT CashFlow — início">
               <BrandLogo priority variant="hero" />
             </Link>
-            <p className="mt-3 max-w-md text-sm text-muted">Base oficial da nova plataforma financeira.</p>
+            <p className="mt-3 max-w-md text-sm text-muted">Controle financeiro familiar em uso.</p>
           </div>
 
           <nav className="hidden items-center gap-6 text-sm text-muted md:flex">
-            <a href="#stack">Stack</a>
+            <a href="#fluxo">Fluxo</a>
             <a href="#produto">Produto</a>
-            <a href="#proximo-passo">Proximo passo</a>
+            <a href="#acesso">Acesso</a>
           </nav>
         </header>
 
         <div className="grid flex-1 items-center gap-14 py-16 lg:grid-cols-[1.2fr_0.8fr] lg:py-24">
           <section className="space-y-8">
             <div className="inline-flex rounded-full border border-line bg-surface px-4 py-2 text-xs font-medium tracking-[0.18em] text-muted uppercase">
-              Monolito modular, SEO nativo e design system proprio
+              Dashboard, extrato, cartão e lançamentos manuais
             </div>
 
             <div className="space-y-6">
               <h1 className="max-w-4xl font-heading text-5xl leading-none font-semibold tracking-tight sm:text-6xl lg:text-7xl">
-                Controle financeiro compartilhado, sem planilha improvisada.
+                LT CashFlow para operar o caixa familiar.
               </h1>
 
               <p className="max-w-2xl text-lg leading-8 text-muted sm:text-xl">
-                O LT CashFlow entra agora em execucao sobre a stack oficial: Next.js,
-                TypeScript, Tailwind, Drizzle e MySQL. A base esta pronta para auth,
-                gestoes, membros, lancamentos e relatorios.
+                A versão atual já tem área autenticada, gestões, contas, categorias,
+                lançamentos manuais, conciliação, cartão, reservas e assistente.
+                Para adicionar uma entrada ou saída, abra o dashboard e use o botão +.
               </p>
             </div>
 
@@ -58,9 +58,9 @@ async function HomeContent() {
               </Link>
               <Link
                 className="inline-flex items-center justify-center rounded-full border border-line bg-surface px-6 py-3 text-sm font-semibold text-foreground"
-                href={session?.user?.id ? "/entrar" : "#stack"}
+                href={session?.user?.id ? "/entrar" : "/entrar"}
               >
-                {session?.user?.id ? "Trocar sessao" : "Ver stack oficial"}
+                {session?.user?.id ? "Trocar sessao" : "Entrar"}
               </Link>
             </div>
           </section>
@@ -72,60 +72,60 @@ async function HomeContent() {
               </p>
               <div className="mt-8 space-y-4">
                 <div className="flex items-end justify-between">
-                  <span className="text-sm text-background/70">Frontend oficial</span>
-                  <span className="font-heading text-3xl">Next.js 16</span>
+                  <span className="text-sm text-background/70">Lançamento manual</span>
+                  <span className="font-heading text-3xl">Ativo</span>
                 </div>
                 <div className="flex items-end justify-between">
-                  <span className="text-sm text-background/70">Banco e modelagem</span>
-                  <span className="font-heading text-3xl">MySQL + Drizzle</span>
+                  <span className="text-sm text-background/70">Assistente e quick-add</span>
+                  <span className="font-heading text-3xl">Ativo</span>
                 </div>
                 <div className="flex items-end justify-between">
-                  <span className="text-sm text-background/70">UI</span>
-                  <span className="font-heading text-3xl">Tailwind</span>
+                  <span className="text-sm text-background/70">Conciliação</span>
+                  <span className="font-heading text-3xl">Manual</span>
                 </div>
               </div>
             </div>
 
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
               <article className="rounded-[1.25rem] bg-surface-strong p-4">
-                <p className="text-xs tracking-[0.18em] text-muted uppercase">Modelagem</p>
-                <p className="mt-3 text-2xl font-semibold">11 tabelas</p>
-                <p className="mt-2 text-sm text-muted">Gestoes, membros, contas, categorias e auditoria.</p>
+                <p className="text-xs tracking-[0.18em] text-muted uppercase">Entrada e saída</p>
+                <p className="mt-3 text-2xl font-semibold">Botão +</p>
+                <p className="mt-2 text-sm text-muted">Novo lançamento fica no menu rápido do dashboard.</p>
               </article>
 
               <article className="rounded-[1.25rem] bg-surface-strong p-4">
-                <p className="text-xs tracking-[0.18em] text-muted uppercase">Proximo modulo</p>
-                <p className="mt-3 text-2xl font-semibold">Auth + Gestoes</p>
-                <p className="mt-2 text-sm text-muted">Primeira entrega funcional do dominio real.</p>
+                <p className="text-xs tracking-[0.18em] text-muted uppercase">Área certa</p>
+                <p className="mt-3 text-2xl font-semibold">/dashboard</p>
+                <p className="mt-2 text-sm text-muted">A página inicial é só entrada pública.</p>
               </article>
             </div>
           </aside>
         </div>
       </section>
 
-      <section id="stack" className="border-y border-line bg-surface">
+      <section id="fluxo" className="border-y border-line bg-surface">
         <div className="mx-auto grid max-w-7xl gap-6 px-6 py-14 sm:px-10 lg:grid-cols-3 lg:px-12">
           <article className="rounded-[1.75rem] border border-line bg-background p-6">
-            <p className="text-xs tracking-[0.18em] text-muted uppercase">App</p>
-            <h2 className="mt-4 font-heading text-3xl font-semibold">Next.js App Router</h2>
+            <p className="text-xs tracking-[0.18em] text-muted uppercase">Dashboard</p>
+            <h2 className="mt-4 font-heading text-3xl font-semibold">Visão do caixa</h2>
             <p className="mt-3 text-base leading-7 text-muted">
-              SEO nativo, metadata, sitemap, SSR e estrutura pronta para area publica e area autenticada.
+              Resumo de entradas, saídas, liquidez, reservas, cartão e últimas movimentações.
             </p>
           </article>
 
           <article className="rounded-[1.75rem] border border-line bg-background p-6">
-            <p className="text-xs tracking-[0.18em] text-muted uppercase">Dados</p>
-            <h2 className="mt-4 font-heading text-3xl font-semibold">Drizzle + MySQL</h2>
+            <p className="text-xs tracking-[0.18em] text-muted uppercase">Lançamentos</p>
+            <h2 className="mt-4 font-heading text-3xl font-semibold">Entrada e saída manual</h2>
             <p className="mt-3 text-base leading-7 text-muted">
-              SQL proximo do dominio, tipagem forte e manutencao mais racional para quem esta aprendendo.
+              Use o botão + no dashboard para registrar despesa, receita, ajuste ou transferência.
             </p>
           </article>
 
           <article className="rounded-[1.75rem] border border-line bg-background p-6">
-            <p className="text-xs tracking-[0.18em] text-muted uppercase">Interface</p>
-            <h2 className="mt-4 font-heading text-3xl font-semibold">Tailwind + sistema proprio</h2>
+            <p className="text-xs tracking-[0.18em] text-muted uppercase">Extrato</p>
+            <h2 className="mt-4 font-heading text-3xl font-semibold">Conferência e edição</h2>
             <p className="mt-3 text-base leading-7 text-muted">
-              Mais controle visual, melhor reaproveitamento e menos dependencias de tema pronto.
+              Revise movimentações por mês, edite linhas e concilie lançamentos importados.
             </p>
           </article>
         </div>
@@ -135,28 +135,28 @@ async function HomeContent() {
         <div className="grid gap-6 lg:grid-cols-3">
           <div className="rounded-[1.75rem] bg-foreground p-7 text-background">
             <p className="text-xs tracking-[0.18em] uppercase text-background/70">Gestoes</p>
-            <p className="mt-4 text-2xl font-semibold">Uma pessoa, varias gestoes, varios membros.</p>
+            <p className="mt-4 text-2xl font-semibold">Uma gestão familiar com membros e permissões.</p>
           </div>
           <div className="rounded-[1.75rem] border border-line bg-surface p-7">
             <p className="text-xs tracking-[0.18em] text-muted uppercase">Lancamentos</p>
-            <p className="mt-4 text-2xl font-semibold">Rateio real entre participantes, sem gambiarra.</p>
+            <p className="mt-4 text-2xl font-semibold">Criação manual, assistida por IA ou via conciliação.</p>
           </div>
           <div className="rounded-[1.75rem] border border-line bg-surface p-7">
             <p className="text-xs tracking-[0.18em] text-muted uppercase">Auditoria</p>
-            <p className="mt-4 text-2xl font-semibold">Rastreabilidade desde a primeira versao funcional.</p>
+            <p className="mt-4 text-2xl font-semibold">Histórico financeiro organizado por conta e categoria.</p>
           </div>
         </div>
       </section>
 
-      <section id="proximo-passo" className="mx-auto max-w-7xl px-6 pb-16 sm:px-10 lg:px-12 lg:pb-24">
+      <section id="acesso" className="mx-auto max-w-7xl px-6 pb-16 sm:px-10 lg:px-12 lg:pb-24">
         <div className="rounded-[2rem] border border-line bg-surface-strong p-8">
-          <p className="text-xs tracking-[0.18em] text-muted uppercase">Proximo passo imediato</p>
+          <p className="text-xs tracking-[0.18em] text-muted uppercase">Como abrir a versão atual</p>
           <h2 className="mt-4 font-heading text-4xl font-semibold">
-            Implementar autenticacao e criacao de gestoes sobre a base nova.
+            Rode pela raiz do projeto e acesse o dashboard autenticado.
           </h2>
           <p className="mt-4 max-w-3xl text-lg leading-8 text-muted">
-            Esta entrega fecha a primeira espinha dorsal do sistema: usuario autentica,
-            cria a propria gestao e passa a ter uma base real para contas, categorias e lancamentos.
+            Use pnpm dev em /home/lucas/Documentos/Projetos/LT-CashFlow.
+            Se abrir a pasta frontend separada, você verá o template Vite antigo.
           </p>
         </div>
       </section>
