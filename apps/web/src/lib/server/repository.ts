@@ -605,8 +605,7 @@ export async function createGestaoWithDefaults(input: {
     const categoriasPadrao = [
       ["Salario", "receita"],
       ["Freelance", "receita"],
-      ["Moradia", "despesa"],
-      ["Alimentacao", "despesa"],
+      ["Alimentação/Moradia", "despesa"],
       ["Transporte", "despesa"],
       ["Saude", "despesa"],
       ["Lazer", "despesa"],
@@ -717,8 +716,7 @@ export async function createGestaoWithOpeningBalances(input: {
     const categoriasPadrao = [
       ["Salario", "receita"],
       ["Freelance", "receita"],
-      ["Moradia", "despesa"],
-      ["Alimentacao", "despesa"],
+      ["Alimentação/Moradia", "despesa"],
       ["Transporte", "despesa"],
       ["Saude", "despesa"],
       ["Lazer", "despesa"],
@@ -2568,6 +2566,48 @@ export async function listCashAccountBreakdown(gestaoId: number) {
   return rows;
 }
 
+export async function listLancamentosBaseSaldoContas(gestaoId: number): Promise<LancamentoListItem[]> {
+  const [rows] = await pool.query<LancamentoRow[]>(
+    `
+      SELECT
+        l.id,
+        ct.id AS conta_id,
+        l.conta_destino_id,
+        ctd.tipo AS conta_destino_tipo,
+        l.categoria_id,
+        l.criado_por_usuario_id,
+        l.tipo,
+        l.status,
+        l.meio,
+        l.descricao,
+        l.valor_total,
+        DATE_FORMAT(l.competencia_data, '%Y-%m-%d') AS competencia_data,
+        DATE_FORMAT(l.fatura_competencia_data, '%Y-%m-%d') AS fatura_competencia_data,
+        TIME_FORMAT(l.competencia_hora, '%H:%i') AS competencia_hora,
+        DATE_FORMAT(l.vencimento_data, '%Y-%m-%d') AS vencimento_data,
+        c.nome AS categoria_nome,
+        ct.nome AS conta_nome,
+        ctd.nome AS conta_destino_nome,
+        ct.tipo AS conta_tipo
+      FROM contas ct
+      ${JOIN_LANCAMENTOS_NA_CONTA}
+      LEFT JOIN contas ctd
+        ON ctd.id = l.conta_destino_id
+      LEFT JOIN categorias c
+        ON c.id = l.categoria_id
+      WHERE ct.gestao_id = ?
+        AND ct.ativa = 1
+        AND ct.tipo <> 'cartao_credito'
+        AND l.id IS NOT NULL
+        AND l.status = 'liquidado'
+      ORDER BY l.competencia_data DESC, COALESCE(l.competencia_hora, TIME(l.criado_em)) DESC, l.criado_em DESC
+    `,
+    [gestaoId],
+  );
+
+  return rows.map((row) => ({ ...row })) satisfies LancamentoListItem[];
+}
+
 export async function listCreditCardBreakdown(gestaoId: number) {
   const [rows] = await pool.query<CashAccountBreakdownRow[]>(
     `
@@ -2799,7 +2839,13 @@ export async function listLancamentosPorPeriodo(input: {
   gestaoId: number;
   dateFrom: string;
   dateTo: string;
+  dateMode?: "gestao" | "competencia";
 }) {
+  const dataRecorte =
+    input.dateMode === "competencia" ? "l.competencia_data" : SQL_L_DATA_RECORTE_GESTAO;
+  const orderBy =
+    input.dateMode === "competencia" ? ORDER_BY_LANCAMENTO_RECIENTE_DESC : ORDER_BY_LANCAMENTO_FATURA_DESC;
+
   const [rows] = await pool.query<LancamentoRow[]>(
     `
       SELECT
@@ -2831,10 +2877,10 @@ export async function listLancamentosPorPeriodo(input: {
         ON c.id = l.categoria_id
       WHERE l.gestao_id = ?
         AND l.status <> 'cancelado'
-        AND ${SQL_L_DATA_RECORTE_GESTAO} >= ?
-        AND ${SQL_L_DATA_RECORTE_GESTAO} <= ?
+        AND ${dataRecorte} >= ?
+        AND ${dataRecorte} <= ?
         AND ${sqlLancamentoNaoEhPrevistoSinteticoGastoFixo("l")}
-      ORDER BY ${ORDER_BY_LANCAMENTO_FATURA_DESC}
+      ORDER BY ${orderBy}
     `,
     [input.gestaoId, input.dateFrom, input.dateTo],
   );

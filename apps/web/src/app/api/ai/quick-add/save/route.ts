@@ -129,11 +129,11 @@ function inferExpenseCategoryName(referenceText: string) {
   }
 
   if (/\b(planta|moradia|casa|reforma|material de construcao|construcao)\b/.test(referenceText)) {
-    return "Moradia";
+    return "Alimentação/Moradia";
   }
 
   if (/\b(super\s*mercado|supermercado|mercado|feira|padaria|restaurante|ifood|conveniencia)\b/.test(referenceText)) {
-    return "Alimentacao";
+    return "Alimentação/Moradia";
   }
 
   if (/\b(mesada|filho|filha|filhos|crianca)\b/.test(referenceText)) {

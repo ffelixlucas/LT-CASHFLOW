@@ -170,7 +170,7 @@ function pickStatementCategory(
       /(superdia|mercado|supermercado|feira|padaria)/.test(normalizedDetail)
     ) {
       return (
-        findCategoryByName(categories, ["Alimentacao"], "despesa") ??
+        findCategoryByName(categories, ["Alimentação/Moradia", "Alimentacao", "Moradia"], "despesa") ??
         findCategoryByName(categories, ["Outros"], "despesa") ??
         categories[0] ??
         null

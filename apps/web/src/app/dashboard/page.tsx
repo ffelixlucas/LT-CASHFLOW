@@ -1,11 +1,14 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { BrandLogo } from "@/components/brand/brand-logo";
 import { CategoryDrilldown } from "@/components/dashboard/category-drilldown";
+import { DashboardPeriodPersistence } from "@/components/dashboard/dashboard-period-persistence";
 import { DashboardPageHeader } from "@/components/dashboard/dashboard-page-header";
 import { DashboardPageShell } from "@/components/dashboard/dashboard-page-shell";
 import { DashboardStack } from "@/components/dashboard/dashboard-stack";
+import { LancamentosDrilldown, type DrilldownGroup } from "@/components/dashboard/lancamentos-drilldown";
 import { PlanoFixosMesModal } from "@/components/dashboard/plano-fixos-mes-modal";
 import { requireUser } from "@/lib/server/auth";
 import { timeServerAsync } from "@/lib/server/dashboard-server-timing";
@@ -21,6 +24,7 @@ import {
   listCashAccountBreakdown,
   listCategorias,
   listContas,
+  listLancamentosBaseSaldoContas,
   listLancamentosPorPeriodo,
   listUserGestoes,
 } from "@/lib/server/repository";
@@ -91,25 +95,6 @@ function signedMoney(value: string | number | null | undefined) {
   return `${amount >= 0 ? "+" : "-"}${money(Math.abs(amount))}`;
 }
 
-function formatAccountType(tipo: string) {
-  switch (tipo) {
-    case "corrente":
-      return "Conta corrente";
-    case "carteira":
-      return "Carteira";
-    case "caixa":
-      return "Caixa";
-    case "poupanca":
-      return "Poupança";
-    case "investimento":
-      return "Investimento";
-    case "cartao_credito":
-      return "Cartão de crédito";
-    default:
-      return "Outra origem";
-  }
-}
-
 function movementSign(tipo: string) {
   if (tipo === "receita") return "+";
   if (tipo === "despesa") return "-";
@@ -157,6 +142,40 @@ function formatYearDay(dateIso: string) {
   }).format(new Date(`${dateIso}T12:00:00`));
 }
 
+function datePartsInSaoPaulo(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone: "America/Sao_Paulo",
+    weekday: "short",
+    year: "numeric",
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+
+  return {
+    day: Number(value("day")),
+    month: Number(value("month")),
+    weekday: value("weekday"),
+    year: Number(value("year")),
+  };
+}
+
+function isoFromParts(year: number, month: number, day: number) {
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function addDaysIso(dateIso: string, days: number) {
+  const [year = 0, month = 1, day = 1] = dateIso.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + days, 12, 0, 0));
+  return isoFromParts(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
+}
+
+function endOfMonthIso(year: number, month: number) {
+  const date = new Date(Date.UTC(year, month, 0, 12, 0, 0));
+  return isoFromParts(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
+}
+
 function normalizePeriod(value: string | undefined): PeriodKey {
   if (value === "week" || value === "month" || value === "year") {
     return value;
@@ -165,48 +184,47 @@ function normalizePeriod(value: string | undefined): PeriodKey {
   return "month";
 }
 
+function cookiePeriod(value: string | undefined) {
+  return normalizePeriod(value);
+}
+
 function periodBounds(period: PeriodKey) {
+  const base = datePartsInSaoPaulo();
+
   if (period === "month") {
-    const base = new Date();
-    const start = new Date(base.getFullYear(), base.getMonth(), 1);
-    const end = new Date(base.getFullYear(), base.getMonth() + 1, 0);
+    const from = isoFromParts(base.year, base.month, 1);
+    const to = endOfMonthIso(base.year, base.month);
     return {
-      from: start.toISOString().slice(0, 10),
-      to: end.toISOString().slice(0, 10),
+      from,
+      to,
       label: "Mes atual",
-      range: `${start.toLocaleDateString("pt-BR", { month: "long", year: "numeric" })}`,
-      mapped: `${formatYearDay(start.toISOString().slice(0, 10))} a ${formatYearDay(end.toISOString().slice(0, 10))}`,
+      range: `${new Date(`${from}T12:00:00`).toLocaleDateString("pt-BR", { month: "long", year: "numeric" })}`,
+      mapped: `${formatYearDay(from)} a ${formatYearDay(to)}`,
     };
   }
 
   if (period === "year") {
-    const base = new Date();
-    const start = new Date(base.getFullYear(), 0, 1);
-    const end = new Date(base.getFullYear(), 11, 31);
+    const from = isoFromParts(base.year, 1, 1);
+    const to = isoFromParts(base.year, 12, 31);
     return {
-      from: start.toISOString().slice(0, 10),
-      to: end.toISOString().slice(0, 10),
+      from,
+      to,
       label: "Ano atual",
-      range: `${base.getFullYear()}`,
-      mapped: `${formatYearDay(start.toISOString().slice(0, 10))} a ${formatYearDay(end.toISOString().slice(0, 10))}`,
+      range: `${base.year}`,
+      mapped: `${formatYearDay(from)} a ${formatYearDay(to)}`,
     };
   }
 
-  const base = new Date();
-  const day = base.getDay();
-  const diffToMonday = day === 0 ? -6 : 1 - day;
-  const start = new Date(base);
-  start.setDate(base.getDate() + diffToMonday);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(start.getDate() + 6);
-  end.setHours(23, 59, 59, 999);
+  const weekdayIndex = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(base.weekday);
+  const todayIso = isoFromParts(base.year, base.month, base.day);
+  const from = addDaysIso(todayIso, -(weekdayIndex >= 0 ? weekdayIndex : 0));
+  const to = addDaysIso(from, 6);
   return {
-    from: start.toISOString().slice(0, 10),
-    to: end.toISOString().slice(0, 10),
+    from,
+    to,
     label: "Semana atual",
-    range: formatRange(start.toISOString().slice(0, 10), end.toISOString().slice(0, 10)),
-    mapped: `${formatWeekDay(start.toISOString().slice(0, 10))} a ${formatWeekDay(end.toISOString().slice(0, 10))}`,
+    range: formatRange(from, to),
+    mapped: `${formatWeekDay(from)} a ${formatWeekDay(to)}`,
   };
 }
 
@@ -218,9 +236,14 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   }
 
   const params = await searchParams;
+  const cookieStore = await cookies();
   const gestoes = await listUserGestoes(user.id);
   const requestedGestaoId = parseRequestedGestaoId(params.gestao);
-  const selectedPeriod = normalizePeriod(typeof params.period === "string" ? params.period : undefined);
+  const selectedPeriod = normalizePeriod(
+    typeof params.period === "string"
+      ? params.period
+      : cookiePeriod(cookieStore.get("ltcashflow_dashboard_period")?.value),
+  );
   const gestaoAtiva = await resolveGestaoAtivaForRead(user.id, gestoes, requestedGestaoId);
   const gestaoEhFamiliar = gestaoAtiva?.tipo === "familiar";
   const status =
@@ -233,13 +256,21 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
 
   const hoje = new Date().toISOString().slice(0, 10);
   const periodoAtual = periodBounds(selectedPeriod);
+  const gastoReviewTitle =
+    selectedPeriod === "week"
+      ? "Revisar gastos da semana"
+      : selectedPeriod === "year"
+        ? "Revisar gastos do ano"
+        : "Revisar gastos do mês";
   const periodoAno = periodBounds("year");
   const [
     contas,
     categorias,
     cashAccounts,
+    lancamentosBaseSaldoContas,
     saldosAtuais,
     lancamentosPeriodo,
+    lancamentosSemanaPorCompetencia,
     resumoContaCorrentePeriodo,
     planoFixosTemplateItens,
     resumoFaturasCartao,
@@ -248,12 +279,21 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       listContas(gestaoAtiva.id),
       listCategorias(gestaoAtiva.id),
       listCashAccountBreakdown(gestaoAtiva.id),
+      listLancamentosBaseSaldoContas(gestaoAtiva.id),
       getGestaoSaldosPorBucket(gestaoAtiva.id),
       listLancamentosPorPeriodo({
         gestaoId: gestaoAtiva.id,
         dateFrom: periodoAtual.from,
         dateTo: periodoAtual.to,
       }),
+      selectedPeriod === "week"
+        ? listLancamentosPorPeriodo({
+            gestaoId: gestaoAtiva.id,
+            dateFrom: periodoAtual.from,
+            dateMode: "competencia",
+            dateTo: periodoAtual.to,
+          })
+        : Promise.resolve(null),
       getContaCorrentePeriodoResumo({
         gestaoId: gestaoAtiva.id,
         dateFrom: periodoAtual.from,
@@ -296,7 +336,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     disponivelAtual >= 0
       ? `${money(disponivelAtual)} livres na corrente`
       : `${money(Math.abs(disponivelAtual))} negativos na corrente`;
-  const despesasVisiveisPeriodo = lancamentosPeriodo.filter(
+  const lancamentosGastosPeriodo = lancamentosSemanaPorCompetencia ?? lancamentosPeriodo;
+  const despesasVisiveisPeriodo = lancamentosGastosPeriodo.filter(
     (item) => item.status !== "cancelado" && item.tipo === "despesa" && item.categoria_nome !== "Saida da conta",
   );
   const totaisPorCategoria = Array.from(
@@ -319,6 +360,27 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     .sort((a, b) => b.value - a.value);
   const maiorCategoria = totaisPorCategoria[0] ?? null;
   const maioresContas = [...cashAccounts].sort((a, b) => Number(b.saldo_atual ?? 0) - Number(a.saldo_atual ?? 0)).slice(0, 4);
+  const gruposPorMeio: DrilldownGroup[] = totaisPorMeio.map((item) => ({
+    name: item.name,
+    total: item.value,
+    items: despesasVisiveisPeriodo.filter((lancamento) => {
+      const name =
+        lancamento.meio === "pix"
+          ? "Pix"
+          : lancamento.meio === "debito"
+            ? "Débito"
+            : lancamento.meio === "credito"
+              ? "Crédito"
+              : "Outros";
+      return name === item.name;
+    }),
+  }));
+  const gruposPorOrigem: DrilldownGroup[] = maioresContas.map((conta) => ({
+    name: conta.nome,
+    total: Number(conta.saldo_atual ?? 0),
+    description: `Saldo atual considera saldo inicial de ${money(Number(conta.saldo_inicial ?? 0))} e os lançamentos liquidados dessa conta.`,
+    items: lancamentosBaseSaldoContas.filter((lancamento) => lancamento.conta_id === conta.id),
+  }));
   const ultimosLancamentos = lancamentosPeriodo.slice(0, 6);
   const precisaEstadoInicial = contas.some(
     (c) =>
@@ -348,6 +410,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const showPrimeiroPasso = !contas.length || precisaEstadoInicial;
   return (
     <DashboardPageShell>
+      <DashboardPeriodPersistence period={selectedPeriod} />
       <DashboardPageHeader
         active="inicio"
         brand={<BrandLogo priority variant="dashboard" />}
@@ -536,22 +599,11 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                 </div>
                 <Link href={`/dashboard/config?gestao=${gestaoAtiva.id}`}>Gerenciar</Link>
               </div>
-              <div className="account-stack">
-                {maioresContas.map((conta) => {
-                  const saldo = Number(conta.saldo_atual ?? 0);
-                  const width = tenhoHoje > 0 ? Math.min(100, Math.max(4, (Math.max(0, saldo) / tenhoHoje) * 100)) : 4;
-                  return (
-                    <div className="account-row" key={conta.id}>
-                      <div>
-                        <strong>{conta.nome}</strong>
-                        <span>{formatAccountType(conta.tipo)}</span>
-                      </div>
-                      <b>{money(saldo)}</b>
-                      <i style={{ width: `${width}%` }} />
-                    </div>
-                  );
-                })}
-              </div>
+              <LancamentosDrilldown
+                emptyText="Sem contas com saldo para revisar."
+                groups={gruposPorOrigem}
+                modalKicker="Origem"
+              />
             </article>
           </section>
 
@@ -560,7 +612,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               <div className="panel-head">
                 <div>
                   <p className="dashboard-kicker">Gastos</p>
-                  <h3>Clique para revisar</h3>
+                  <h3>{gastoReviewTitle}</h3>
                 </div>
               </div>
               <CategoryDrilldown
@@ -577,21 +629,11 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                   <h3>Por meio</h3>
                 </div>
               </div>
-              <div className="rank-list">
-                {totaisPorMeio.map((item) => {
-                  const width = saidasPeriodo > 0 ? Math.min(100, (item.value / saidasPeriodo) * 100) : 0;
-                  return (
-                    <div className="rank-row" key={item.name}>
-                      <div>
-                        <span>{item.name}</span>
-                        <strong>{money(item.value)}</strong>
-                      </div>
-                      <i style={{ width: `${width}%` }} />
-                    </div>
-                  );
-                })}
-                {totaisPorMeio.length === 0 ? <p className="muted">Sem despesas no recorte.</p> : null}
-              </div>
+              <LancamentosDrilldown
+                emptyText="Sem despesas no recorte."
+                groups={gruposPorMeio}
+                modalKicker="Meio de pagamento"
+              />
             </article>
           </section>
 

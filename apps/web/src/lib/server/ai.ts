@@ -318,7 +318,7 @@ function keywordCategoria(prompt: string, categories: CategoriaOption[], tipo: s
   }
 
   if (matchesGroceryAlimentacaoCue(normalized)) {
-    const match = categories.find((category) => normalizeText(category.nome) === normalizeText("Alimentacao"));
+    const match = categories.find((category) => normalizeText(category.nome) === normalizeText("Alimentação/Moradia"));
 
     if (match) {
       return match;
@@ -328,7 +328,7 @@ function keywordCategoria(prompt: string, categories: CategoriaOption[], tipo: s
   const keywordMap: Array<{ terms: RegExp; category: string }> = [
     { terms: /(uber|99|combustivel|gasolina|onibus|metro|transporte)/, category: "Transporte" },
     { terms: /(farmacia|medico|consulta|saude)/, category: "Saude" },
-    { terms: /(aluguel|condominio|luz|agua|internet|moradia)/, category: "Moradia" },
+    { terms: /(aluguel|condominio|luz|agua|internet|moradia)/, category: "Alimentação/Moradia" },
     { terms: /(cinema|viagem|show|lazer|bar)/, category: "Lazer" },
     { terms: /(mesada|filho|filha|filhos|crianca|criança)/, category: "Filhos" },
     { terms: /(salario|pagamento|holerite)/, category: "Salario" },
@@ -381,13 +381,13 @@ function findMentionedCategoria(prompt: string, categories: CategoriaOption[]) {
   }
 
   if (matchesGroceryAlimentacaoCue(normalized)) {
-    return categories.find((category) => normalizeText(category.nome) === normalizeText("Alimentacao")) ?? null;
+    return categories.find((category) => normalizeText(category.nome) === normalizeText("Alimentação/Moradia")) ?? null;
   }
 
   const keywordMap: Array<{ terms: RegExp; category: string }> = [
     { terms: /(uber|99|combustivel|gasolina|onibus|metro|transporte)/, category: "Transporte" },
     { terms: /(farmacia|medico|consulta|saude)/, category: "Saude" },
-    { terms: /(aluguel|condominio|luz|agua|internet|moradia)/, category: "Moradia" },
+    { terms: /(aluguel|condominio|luz|agua|internet|moradia)/, category: "Alimentação/Moradia" },
     { terms: /(cinema|viagem|show|lazer|bar)/, category: "Lazer" },
     { terms: /(mesada|filho|filha|filhos|crianca|criança)/, category: "Filhos" },
     { terms: /(salario|pagamento|holerite)/, category: "Salario" },
