@@ -19,6 +19,7 @@ import {
   findRecentDuplicateLancamentoId,
   listCategorias,
   listContas,
+  resolveContaIdForLancamento,
 } from "@/lib/server/repository";
 
 function formatDate(date: Date) {
@@ -187,17 +188,6 @@ async function normalizeQuickAddSuggestion(gestaoId: number, suggestion: QuickAd
   const next: QuickAddSuggestion = { ...suggestion };
   next.descricao = cleanLancamentoDescricao(next.descricao);
 
-  if (suggestion.tipo === "despesa" && suggestion.meio === "credito" && currentConta?.tipo !== "cartao_credito") {
-    const wantsLucas = currentConta ? /\blucas\b/.test(normalizeText(currentConta.nome)) : false;
-    const card =
-      contas.find((conta) => conta.tipo === "cartao_credito" && (!wantsLucas || /\blucas\b/.test(normalizeText(conta.nome)))) ??
-      contas.find((conta) => conta.tipo === "cartao_credito");
-
-    if (card) {
-      next.contaId = card.id;
-    }
-  }
-
   if (
     suggestion.tipo === "despesa" &&
     suggestion.meio !== "credito" &&
@@ -298,9 +288,15 @@ async function saveQuickAddSuggestion(input: {
   // foi criado nos últimos 2 minutos, devolve o id existente em vez de duplicar.
   // Protege contra cliques duplos no botão "Confirmar" e contra fluxos da IA que
   // disparam dois INSERTs em sequência.
-  const duplicateId = await findRecentDuplicateLancamentoId({
+  const contaIdResolved = await resolveContaIdForLancamento({
     gestaoId: input.gestaoId,
     contaId: suggestion.contaId,
+    tipo: suggestion.tipo,
+    meio: suggestion.meio,
+  });
+  const duplicateId = await findRecentDuplicateLancamentoId({
+    gestaoId: input.gestaoId,
+    contaId: contaIdResolved,
     valorTotal: suggestion.valorTotal,
     descricao: suggestion.descricao,
     competenciaData: suggestion.competenciaData,

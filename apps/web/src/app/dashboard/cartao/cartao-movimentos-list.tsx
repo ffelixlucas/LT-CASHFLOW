@@ -8,6 +8,7 @@ import {
   type LancamentoInlineResult,
   updateLancamentoAction,
 } from "@/app/dashboard/actions";
+import { DateInput } from "@/components/ui/date-input";
 
 type ContaOption = {
   id: number;
@@ -304,19 +305,18 @@ export function CartaoMovimentosList({
                 required
               />
 
-              <input
+              <DateInput
                 className="rounded-2xl border border-line bg-background px-4 py-3"
                 defaultValue={selectedMovimento.competencia_data}
                 name="competenciaData"
-                type="date"
                 required
               />
 
-              <input
+              <DateInput
                 className="rounded-2xl border border-line bg-background px-4 py-3"
-                defaultValue={selectedMovimento.fatura_competencia_data ?? ""}
+                defaultValue={selectedMovimento.fatura_competencia_data ?? undefined}
                 name="faturaCompetenciaData"
-                type="date"
+                placeholder="Competencia da fatura"
               />
 
               <input
@@ -326,11 +326,11 @@ export function CartaoMovimentosList({
                 type="time"
               />
 
-              <input
+              <DateInput
                 className="rounded-2xl border border-line bg-background px-4 py-3 lg:col-span-2"
-                defaultValue={selectedMovimento.vencimento_data ?? ""}
+                defaultValue={selectedMovimento.vencimento_data ?? undefined}
                 name="vencimentoData"
-                type="date"
+                placeholder="Vencimento"
               />
 
               <div className="flex flex-wrap justify-end gap-3 lg:col-span-2">

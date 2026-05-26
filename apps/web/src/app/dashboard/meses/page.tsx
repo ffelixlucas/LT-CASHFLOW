@@ -6,6 +6,7 @@ import { DashboardPageHeader } from "@/components/dashboard/dashboard-page-heade
 import { DashboardPageShell } from "@/components/dashboard/dashboard-page-shell";
 import { DashboardStack } from "@/components/dashboard/dashboard-stack";
 import { RecentLancamentosTable } from "@/components/dashboard/recent-lancamentos-table";
+import { formatDateForDisplay } from "@/lib/date";
 import { requireUser } from "@/lib/server/auth";
 import { timeServerAsync } from "@/lib/server/dashboard-server-timing";
 import {
@@ -614,7 +615,7 @@ export default async function MesesPage({ searchParams }: MesesPageProps) {
               >
                 <span>{row.descricao}</span>
                 <span className="font-medium text-muted">
-                  {moneyFromFormattedDe(row.valor_total)} · {row.competencia_data}
+                  {moneyFromFormattedDe(row.valor_total)} · {formatDateForDisplay(row.competencia_data)}
                 </span>
               </li>
             ))}

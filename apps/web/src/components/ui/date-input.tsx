@@ -27,7 +27,7 @@ export function DateInput({
 }: DateInputProps) {
   const [internalValue, setInternalValue] = useState(formatDateForDisplay(defaultValue));
 
-  const displayedValue = value ?? internalValue;
+  const displayedValue = value === undefined ? internalValue : formatDateForDisplay(value);
 
   return (
     <input

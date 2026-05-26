@@ -3,6 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { formatDateForDisplay } from "@/lib/date";
+
 import { preserveScrollPosition, restorePreservedScrollPosition } from "@/lib/client/scroll-preservation";
 
 type SelectOption = {
@@ -184,7 +186,7 @@ export function AiQuickAddPanel({
             <div className="rounded-2xl bg-surface px-4 py-3">
               <p className="text-xs uppercase tracking-[0.18em] text-muted">Data</p>
               <p className="mt-2">
-                {suggestion.competenciaData}
+                {formatDateForDisplay(suggestion.competenciaData)}
                 {suggestion.competenciaHora ? ` · ${suggestion.competenciaHora}` : ""}
               </p>
             </div>

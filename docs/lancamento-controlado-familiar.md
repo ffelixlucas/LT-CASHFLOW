@@ -73,7 +73,7 @@ Configure no serviço **web** do Railway (nunca commitar valores reais):
 | `NEXTAUTH_URL` | Sim | URL **exata** do app, ex. `https://seu-app.up.railway.app` |
 | `NEXTAUTH_SECRET` | Sim | ≥ 32 caracteres aleatórios; **novo por ambiente** |
 | `GROQ_API_KEY` | Não | Assistente / quick-add (recomendado) |
-| `GROQ_MODEL` | Não | Ex.: `llama-3.3-70b-versatile` |
+| `GROQ_MODEL` | Não | Ex.: `llama-3.1-8b-instant` |
 | `OPENAI_API_KEY` | Não | Fallback se não usar Groq |
 | `OPENAI_MODEL` | Não | Ex.: `gpt-5-mini` |
 

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DateInput } from "@/components/ui/date-input";
 import { preserveScrollPosition, restorePreservedScrollPosition } from "@/lib/client/scroll-preservation";
+import { formatDateForDisplay } from "@/lib/date";
 
 type SpeechRecognitionResultLike = {
   readonly isFinal: boolean;
@@ -396,6 +397,10 @@ function findDraftAccountEdit(
 
 function isDraftFieldEdit(text: string) {
   const normalized = normalizeAssistantText(text);
+
+  if (/^(editar|edita|edite|editar rascunho|edita rascunho)$/.test(normalized.trim())) {
+    return true;
+  }
 
   return (
     (/\b(ajusta|ajuste|muda|mude|altera|altere|corrige|corrija|troca|troque|editar|edita|edite)\b/.test(
@@ -819,6 +824,14 @@ export function GlobalAssistant({
       return false;
     }
 
+    if (/^(editar|edita|edite|editar rascunho|edita rascunho)$/.test(normalizeAssistantText(rawPrompt).trim())) {
+      setMessages((current) => [...current, userMessage]);
+      startQuickAddEditing(lastDraft);
+      setPrompt("");
+      setVoiceError(null);
+      return true;
+    }
+
     const selectedCategory = findDraftCategoryEdit(rawPrompt, selectedGestaoCategorias);
     const nextMeio = detectDraftMeioEdit(rawPrompt);
     const currentContaId =
@@ -905,8 +918,8 @@ export function GlobalAssistant({
         body: JSON.stringify({
           prompt: prompt.trim(),
           gestaoId: selectedGestaoId,
-          // Histórico curto para manter o custo de tokens baixo
-          history: messages.slice(-6).map((m) => ({
+          // Histórico mínimo para manter latência e consumo de tokens baixos.
+          history: messages.slice(-2).map((m) => ({
             role: m.role,
             content: m.text,
           })),
@@ -1363,7 +1376,7 @@ export function GlobalAssistant({
         {
           id: messageId(),
           role: "assistant",
-          text: `Atualizei ${suggestion.quantidade} lancamento(s) para ${suggestion.competenciaData}.`,
+          text: `Atualizei ${suggestion.quantidade} lancamento(s) para ${formatDateForDisplay(suggestion.competenciaData)}.`,
           provider: "info",
           kind: "info",
         },
@@ -1580,7 +1593,7 @@ export function GlobalAssistant({
       <button
         aria-expanded={open}
         aria-label={open ? "Fechar assistente de IA" : "Abrir assistente de IA"}
-        className="fixed right-56 bottom-4 z-[56] flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-foreground text-white shadow-[0_12px_40px_rgba(30,42,47,0.28)] ring-2 ring-white/15 transition-transform hover:scale-[1.04] active:scale-[0.98] sm:right-60 sm:bottom-6 sm:h-[3.75rem] sm:w-[3.75rem]"
+        className="fixed right-4 bottom-4 z-[56] flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-foreground text-white shadow-[0_12px_40px_rgba(30,42,47,0.28)] ring-2 ring-white/15 transition-transform hover:scale-[1.04] active:scale-[0.98] sm:right-6 sm:bottom-6 sm:h-[3.75rem] sm:w-[3.75rem]"
         onClick={() => setOpen((current) => !current)}
         title={open ? "Fechar assistente" : "Assistente IA"}
         type="button"
@@ -1822,7 +1835,7 @@ export function GlobalAssistant({
                                   <strong>Categoria:</strong> {categoriaNome}
                                 </p>
                                 <p>
-                                  <strong>Data:</strong> {draft.data}
+                                  <strong>Data:</strong> {formatDateForDisplay(draft.data)}
                                 </p>
                                 {draft.hora ? (
                                   <p>
@@ -1866,7 +1879,7 @@ export function GlobalAssistant({
                           <div className="rounded-2xl bg-surface px-3 py-3 text-sm" key={result.id}>
                             <p className="break-words font-medium">{result.descricao}</p>
                             <p className="mt-1 text-muted">
-                              {result.competencia_data}
+                              {formatDateForDisplay(result.competencia_data)}
                               {result.conta_nome ? ` · ${result.conta_nome}` : ""}
                               {result.categoria_nome ? ` · ${result.categoria_nome}` : ""}
                               {" · "}
@@ -2060,7 +2073,7 @@ export function GlobalAssistant({
                                 </p>
                                 <p>
                                   <strong>Data:</strong>{" "}
-                                  {`${suggestion.competenciaData}${suggestion.competenciaHora ? ` · ${suggestion.competenciaHora}` : ""}`}
+                                  {`${formatDateForDisplay(suggestion.competenciaData)}${suggestion.competenciaHora ? ` · ${suggestion.competenciaHora}` : ""}`}
                                 </p>
                                 <p>
                                   <strong>Meio:</strong> {suggestion.meio ?? "-"}
@@ -2105,7 +2118,7 @@ export function GlobalAssistant({
                         <div className="space-y-1 pt-1">
                           {message.suggestion.items.slice(0, 5).map((item, index) => (
                             <p key={`${message.id}-item-${index}`}>
-                              {index + 1}. {item.descricao} · {money(item.valorTotal)} · {item.competenciaData}
+                              {index + 1}. {item.descricao} · {money(item.valorTotal)} · {formatDateForDisplay(item.competenciaData)}
                               {item.competenciaHora ? ` · ${item.competenciaHora}` : ""}
                             </p>
                           ))}
@@ -2239,7 +2252,7 @@ export function GlobalAssistant({
                               <strong>Lancamentos:</strong> {suggestion.quantidade}
                             </p>
                             <p>
-                              <strong>Nova data:</strong> {suggestion.competenciaData}
+                              <strong>Nova data:</strong> {formatDateForDisplay(suggestion.competenciaData)}
                             </p>
                             <button
                               className="mt-2 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white"
@@ -2285,7 +2298,7 @@ export function GlobalAssistant({
                         <div className="rounded-2xl bg-surface px-3 py-3 text-sm" key={result.id}>
                           <p className="break-words font-medium">{result.descricao}</p>
                           <p className="mt-1 text-muted">
-                            {result.competencia_data} · {result.conta_nome} · {money(result.valor_total)}
+                            {formatDateForDisplay(result.competencia_data)} · {result.conta_nome} · {money(result.valor_total)}
                           </p>
                         </div>
                       ))}

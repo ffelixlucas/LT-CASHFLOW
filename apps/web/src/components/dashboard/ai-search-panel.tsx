@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 
+import { formatDateForDisplay } from "@/lib/date";
+
 type Result = {
   id: number;
   tipo: string;
@@ -158,7 +160,7 @@ export function AiSearchPanel({ gestaoId }: { gestaoId: number }) {
                     <div>
                       <p className="font-medium">{item.descricao}</p>
                       <p className="text-sm text-muted">
-                        {item.competencia_data} · {item.conta_nome} · {item.categoria_nome ?? "-"}
+                        {formatDateForDisplay(item.competencia_data)} · {item.conta_nome} · {item.categoria_nome ?? "-"}
                       </p>
                     </div>
                     <p className="font-semibold">{money(item.valor_total)}</p>

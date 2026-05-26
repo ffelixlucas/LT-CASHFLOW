@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node -e \"console.error('Frontend antigo desativado. Use pnpm dev na raiz do LT-CashFlow e acesse http://localhost:3000/dashboard.'); process.exit(1)\"",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"

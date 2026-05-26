@@ -25,6 +25,16 @@ function money(value: string | number | null | undefined) {
   }).format(amount);
 }
 
+function formatDateForUser(value: string | null | undefined) {
+  const match = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (!match) {
+    return value ?? "";
+  }
+
+  return `${match[3]}/${match[2]}/${match[1]}`;
+}
+
 export async function POST(request: Request) {
   const session = await auth();
 
@@ -93,7 +103,7 @@ export async function POST(request: Request) {
       plan,
       provider,
       answer: latest
-        ? `O ultimo lancamento foi "${latest.descricao}" em ${latest.competencia_data}, na conta ${latest.conta_nome}, no valor de ${money(latest.valor_total)}.`
+        ? `O ultimo lancamento foi "${latest.descricao}" em ${formatDateForUser(latest.competencia_data)}, na conta ${latest.conta_nome}, no valor de ${money(latest.valor_total)}.`
         : "Nao encontrei nenhum lancamento para esse contexto.",
       results: latest ? [latest] : [],
     });
@@ -110,7 +120,7 @@ export async function POST(request: Request) {
       plan,
       provider,
       answer: item
-        ? `A maior despesa encontrada foi "${item.descricao}" em ${item.competencia_data}, no valor de ${money(item.valor_total)}.`
+        ? `A maior despesa encontrada foi "${item.descricao}" em ${formatDateForUser(item.competencia_data)}, no valor de ${money(item.valor_total)}.`
         : "Nao encontrei despesas com esse contexto.",
       results: item ? [item] : [],
     });
@@ -127,7 +137,7 @@ export async function POST(request: Request) {
       plan,
       provider,
       answer: item
-        ? `A maior receita encontrada foi "${item.descricao}" em ${item.competencia_data}, no valor de ${money(item.valor_total)}.`
+        ? `A maior receita encontrada foi "${item.descricao}" em ${formatDateForUser(item.competencia_data)}, no valor de ${money(item.valor_total)}.`
         : "Nao encontrei receitas com esse contexto.",
       results: item ? [item] : [],
     });

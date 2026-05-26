@@ -57,6 +57,13 @@ export type CategoriaRow = RowDataPacket & {
   natureza: "receita" | "despesa" | "ambos";
 };
 
+type ContaResolucaoCartaoRow = RowDataPacket & {
+  id: number;
+  nome: string;
+  tipo: string;
+  instituicao: string | null;
+};
+
 export type LancamentoRow = RowDataPacket & {
   id: number;
   conta_id: number;
@@ -783,6 +790,84 @@ export async function listContas(gestaoId: number) {
   return rows;
 }
 
+function normalizeContaMatchingText(value: string | null | undefined) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .replace(/\b(banco|conta|cartao|cartao de credito|credito|credit|debito|pix)\b/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function contaMatchTokens(conta: ContaResolucaoCartaoRow) {
+  const raw = `${conta.instituicao ?? ""} ${conta.nome}`;
+  return normalizeContaMatchingText(raw)
+    .split(" ")
+    .filter((token) => token.length >= 3);
+}
+
+function pickLinkedCreditCardConta(
+  contas: ContaResolucaoCartaoRow[],
+  contaOrigemId: number,
+): ContaResolucaoCartaoRow | null {
+  const origem = contas.find((conta) => conta.id === contaOrigemId);
+
+  if (!origem || origem.tipo === "cartao_credito") {
+    return origem ?? null;
+  }
+
+  const cartoes = contas.filter((conta) => conta.tipo === "cartao_credito");
+
+  if (cartoes.length === 0) {
+    return null;
+  }
+
+  const origemTokens = new Set(contaMatchTokens(origem));
+  const origemInstituicao = normalizeContaMatchingText(origem.instituicao);
+  const byInstitution =
+    origemInstituicao.length > 0
+      ? cartoes.find((cartao) => normalizeContaMatchingText(cartao.instituicao) === origemInstituicao)
+      : null;
+
+  if (byInstitution) {
+    return byInstitution;
+  }
+
+  const byName = cartoes.find((cartao) => contaMatchTokens(cartao).some((token) => origemTokens.has(token)));
+
+  if (byName) {
+    return byName;
+  }
+
+  return cartoes.length === 1 ? (cartoes[0] ?? null) : null;
+}
+
+export async function resolveContaIdForLancamento(input: {
+  gestaoId: number;
+  contaId: number;
+  tipo: "receita" | "despesa" | "ajuste" | "transferencia";
+  meio?: LancamentoMeio | null;
+}) {
+  if (input.tipo !== "despesa" || input.meio !== "credito") {
+    return input.contaId;
+  }
+
+  const [contas] = await pool.query<ContaResolucaoCartaoRow[]>(
+    `
+      SELECT id, nome, tipo, instituicao
+      FROM contas
+      WHERE gestao_id = ?
+        AND ativa = 1
+      ORDER BY criado_em ASC
+    `,
+    [input.gestaoId],
+  );
+
+  return pickLinkedCreditCardConta(contas, input.contaId)?.id ?? input.contaId;
+}
+
 function compareLancamentosDesc(a: LancamentoListItem, b: LancamentoListItem) {
   const da = a.fatura_competencia_data ?? a.competencia_data;
   const db = b.fatura_competencia_data ?? b.competencia_data;
@@ -1082,9 +1167,16 @@ export async function createLancamento(input: {
   competenciaHora?: string;
   vencimentoData?: string;
 }) {
-  await ensureFinancialRefsInGestao({
+  const contaId = await resolveContaIdForLancamento({
     gestaoId: input.gestaoId,
     contaId: input.contaId,
+    tipo: input.tipo,
+    meio: input.meio,
+  });
+
+  await ensureFinancialRefsInGestao({
+    gestaoId: input.gestaoId,
+    contaId,
     categoriaId: input.categoriaId ?? null,
     contaDestinoId: input.contaDestinoId ?? null,
   });
@@ -1120,7 +1212,7 @@ export async function createLancamento(input: {
     if (!faturaCompetenciaResolved && input.tipo === "despesa") {
       const [contaRows] = await connection.query<Array<RowDataPacket & { tipo: string; fechamento_dia: number | null }>>(
         `SELECT tipo, fechamento_dia FROM contas WHERE id = ? AND gestao_id = ? LIMIT 1`,
-        [input.contaId, input.gestaoId],
+        [contaId, input.gestaoId],
       );
       const contaInfo = contaRows[0];
       if (contaInfo && contaInfo.tipo === "cartao_credito") {
@@ -1156,7 +1248,7 @@ export async function createLancamento(input: {
       `,
       [
         input.gestaoId,
-        input.contaId,
+        contaId,
         input.categoriaId ?? null,
         input.userId,
         input.tipo,

@@ -23,6 +23,7 @@ import {
   getCashOverview,
   listCategorias,
   listContas,
+  resolveContaIdForLancamento,
   searchLancamentos,
   summarizeLancamentos,
   summarizeLancamentosByCategoria,
@@ -323,6 +324,7 @@ Regras:
 - Para criar ou deletar, SEMPRE pare apos confirmar: false (rascunho / aviso) e aguarde uma nova mensagem do usuario.
 - NUNCA chame uma ferramenta de mutacao com confirmar: true no mesmo turno do rascunho. Confirmar: true so e permitido em um turno cuja mensagem do usuario seja uma confirmacao explicita ("pode salvar", "confirma", "apaga mesmo", etc.).
 - Para IDs de conta ou categoria, use listar_contas e listar_categorias quando necessario.
+- Nunca mostre IDs internos de conta ou categoria ao usuario; mostre os nomes retornados pelas ferramentas.
 - Quando o usuario disser "igual sempre", "como sempre", "igual o ultimo de X" ou "mesmo padrao", use o historico de lancamentos parecidos para reaproveitar descricao, conta, categoria e meio. Preserve valor, data e hora pedidos pelo usuario.
 - Formate valores em R$ no texto final.
 - Nao invente dados fora do retorno das ferramentas.
@@ -489,6 +491,63 @@ function mergeToolArtifactsFromResult(toolName: string, jsonStr: string, out: As
   }
 }
 
+function formatMoneyBRL(value: number) {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  }).format(value);
+}
+
+function formatDateBR(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return value;
+  }
+
+  return `${match[3]}/${match[2]}/${match[1]}`;
+}
+
+function formatMeioForUser(meio: string) {
+  const labels: Record<string, string> = {
+    pix: "Pix",
+    credito: "cartao de credito",
+    debito: "cartao de debito",
+    dinheiro: "dinheiro",
+    ted_doc: "TED ou DOC",
+    transferencia: "transferencia",
+    outro: "outro",
+  };
+
+  return labels[meio] ?? meio;
+}
+
+async function buildDraftReplyForUser(draft: AssistantToolDraft, gestaoId: number) {
+  const [contas, categorias] = await Promise.all([listContas(gestaoId), listCategorias(gestaoId)]);
+  const contaNome = contas.find((conta) => conta.id === draft.contaId)?.nome ?? `conta #${draft.contaId}`;
+  const categoriaNome =
+    categorias.find((categoria) => categoria.id === draft.categoriaId)?.nome ?? `categoria #${draft.categoriaId}`;
+
+  const linhas = [
+    "Rascunho de lancamento criado. Confira antes de salvar.",
+    "",
+    `Descricao: ${draft.descricao}`,
+    `Valor: ${formatMoneyBRL(draft.valor)}`,
+    `Tipo: ${draft.tipo === "receita" ? "receita" : "despesa"}`,
+    `Conta: ${contaNome}`,
+    `Categoria: ${categoriaNome}`,
+    `Data: ${formatDateBR(draft.data)}`,
+    `Meio: ${formatMeioForUser(draft.meio)}`,
+  ];
+
+  if (draft.hora) {
+    linhas.push(`Hora: ${draft.hora}`);
+  }
+
+  linhas.push("", 'Responda "confirma" ou use o botao para salvar.');
+
+  return linhas.join("\n");
+}
+
 function searchTipo(value: unknown): SearchLancamentosInput["tipo"] | undefined {
   if (value === "receita" || value === "despesa" || value === "transferencia" || value === "ajuste") {
     return value;
@@ -509,6 +568,30 @@ function normalizeText(value: string) {
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
     .toLowerCase();
+}
+
+function simpleLocalAssistantReply(prompt: string) {
+  const normalized = normalizeText(prompt).replace(/[^\p{L}\p{N}\s?]/gu, " ").replace(/\s+/g, " ").trim();
+
+  if (/^(oi|ola|olá|bom dia|boa tarde|boa noite|e ai|e aí)$/.test(normalized)) {
+    return "Oi. Pode mandar o lançamento ou a pergunta financeira.";
+  }
+
+  if (/^(voltou|voltou\?|ta ai|ta ai\?|esta ai|esta ai\?|funcionou|funcionou\?)$/.test(normalized)) {
+    return "Estou respondendo por aqui. Se o Groq limitar de novo, ainda consigo tratar comandos simples e rascunhos pelo fluxo local.";
+  }
+
+  return null;
+}
+
+function isTransientAssistantReply(value: string) {
+  const normalized = normalizeText(value);
+
+  return (
+    normalized.includes("assistente ficou sobrecarregado") ||
+    normalized.includes("nao consegui consultar o assistente agora") ||
+    normalized.includes("tente novamente em alguns segundos")
+  );
 }
 
 function cleanLancamentoDescricao(value: string) {
@@ -625,6 +708,10 @@ function detectTipoFromText(value: string): "receita" | "despesa" | undefined {
   const normalized = normalizeText(value);
 
   if (/\bpix\s+(enviado|mandado)\b/.test(normalized) || /\b(enviei|envio|mandei|mande|passei)\s+(um\s+)?pix\b/.test(normalized)) {
+    return "despesa";
+  }
+
+  if (/\b(recarga|recarreguei|recarregar|debito|cartao de debito)\b/.test(normalized)) {
     return "despesa";
   }
 
@@ -778,18 +865,6 @@ async function normalizeCreateLancamentoArgs(
 
   if (detectedTipo) {
     next.tipo = detectedTipo;
-  }
-
-  if (resolvedTipo === "despesa" && (detectedMeio ?? meio) === "credito" && currentConta?.tipo !== "cartao_credito") {
-    const wantsLucas =
-      /\blucas\b/.test(referenceText) || (currentConta ? /\blucas\b/.test(normalizeText(currentConta.nome)) : false);
-    const card =
-      contas.find((conta) => conta.tipo === "cartao_credito" && (!wantsLucas || /\blucas\b/.test(normalizeText(conta.nome)))) ??
-      contas.find((conta) => conta.tipo === "cartao_credito");
-
-    if (card) {
-      next.contaId = card.id;
-    }
   }
 
   if (
@@ -1054,9 +1129,15 @@ async function executeTool(
         // devolve o id existente em vez de inserir de novo. Cobre dois cenários do bug
         // de duplicidade: (a) o modelo chama `criar_lancamento` com confirmar:true no
         // mesmo turno do rascunho; (b) o usuário clica "Confirmar e salvar" depois.
-        const existingId = await findRecentDuplicateLancamentoId({
+        const contaIdResolved = await resolveContaIdForLancamento({
           gestaoId,
           contaId,
+          tipo,
+          meio,
+        });
+        const existingId = await findRecentDuplicateLancamentoId({
+          gestaoId,
+          contaId: contaIdResolved,
           valorTotal: valor,
           descricao,
           competenciaData: data,
@@ -1203,7 +1284,7 @@ async function callGroqWithTools(
   const artifacts: AssistantToolArtifacts = {};
   const apiKey = process.env.GROQ_API_KEY;
   const baseUrl = process.env.GROQ_BASE_URL ?? "https://api.groq.com/openai/v1";
-  const model = process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile";
+  const model = process.env.GROQ_MODEL ?? "llama-3.1-8b-instant";
 
   if (!apiKey) {
     return {
@@ -1218,63 +1299,40 @@ async function callGroqWithTools(
   const history: Message[] = [...messages];
   const latestUserPrompt =
     [...messages].reverse().find((message) => message.role === "user")?.content ?? null;
-  const MAX_ROUNDS = 8;
-  const MAX_HTTP_ATTEMPTS = 4;
+  const MAX_ROUNDS = 6;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    let response: Response | null = null;
-    let lastErrBody = "";
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "system", content: systemPrompt }, ...history],
+        tools: TOOLS,
+        tool_choice: "auto",
+        temperature: 0.3,
+        max_tokens: (() => {
+          const n = Number(process.env.GROQ_MAX_TOKENS);
+          return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 512) : 384;
+        })(),
+      }),
+    });
 
-    for (let httpTry = 0; httpTry < MAX_HTTP_ATTEMPTS; httpTry++) {
-      response = await fetch(`${baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: "system", content: systemPrompt }, ...history],
-          tools: TOOLS,
-          tool_choice: "auto",
-          temperature: 0.3,
-          max_tokens: (() => {
-            const n = Number(process.env.GROQ_MAX_TOKENS);
-            return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 512) : 384;
-          })(),
-        }),
+    if (!response.ok) {
+      const errorBody = await response.text();
+      if (isGroqRateLimited(response.status, errorBody)) {
+        return { reply: friendlyGroqRateLimitReply(errorBody), artifacts };
+      }
+
+      console.error("[assistant/groq]", {
+        status: response.status,
+        body: errorBody.slice(0, 500),
       });
-
-      if (response.ok) {
-        break;
-      }
-
-      lastErrBody = await response.text();
-
-      if (!isGroqRateLimited(response.status, lastErrBody) || httpTry === MAX_HTTP_ATTEMPTS - 1) {
-        if (isGroqRateLimited(response.status, lastErrBody)) {
-          return { reply: friendlyGroqRateLimitReply(lastErrBody), artifacts };
-        }
-
-        console.error("[assistant/groq]", {
-          status: response.status,
-          body: lastErrBody.slice(0, 500),
-        });
-        return {
-          reply: "Nao consegui consultar o assistente agora. Tente novamente em instantes.",
-          artifacts,
-        };
-      }
-
-      const waitMs = parseGroqRetryAfterMs(lastErrBody) ?? 10_000;
-      await sleep(waitMs);
-    }
-
-    if (!response?.ok) {
       return {
-        reply: isGroqRateLimited(response?.status ?? 0, lastErrBody)
-          ? friendlyGroqRateLimitReply(lastErrBody)
-          : "Nao consegui consultar o assistente agora. Tente novamente em instantes.",
+        reply: "Nao consegui consultar o assistente agora. Tente novamente em instantes.",
         artifacts,
       };
     }
@@ -1379,11 +1437,24 @@ export async function POST(req: Request) {
       throw error;
     }
 
+    const localReply = simpleLocalAssistantReply(prompt);
+    if (localReply) {
+      return NextResponse.json({
+        answer: localReply,
+        provider: "local",
+        kind: "info",
+        results: [],
+      });
+    }
+
     const messages: Message[] = [];
 
     if (Array.isArray(body.history) && body.history.length > 0) {
       for (const m of body.history) {
         if ((m.role === "user" || m.role === "assistant") && typeof m.content === "string") {
+          if (m.role === "assistant" && isTransientAssistantReply(m.content)) {
+            continue;
+          }
           messages.push({ role: m.role, content: m.content });
         }
       }
@@ -1395,10 +1466,11 @@ export async function POST(req: Request) {
     messages.push({ role: "user", content: prompt });
 
     const { reply, artifacts } = await callGroqWithTools(messages, gestaoId, userId);
+    const answer = artifacts.toolDraft ? await buildDraftReplyForUser(artifacts.toolDraft, gestaoId) : reply;
     const provider = process.env.GROQ_API_KEY ? "groq" : "local";
 
     return NextResponse.json({
-      answer: reply,
+      answer,
       provider,
       kind: "info",
       results: [],

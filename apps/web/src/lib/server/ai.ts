@@ -1052,7 +1052,20 @@ function findQuickAddConta(prompt: string, contas: SelectOption[]) {
   }
 
   if (/\b(cartao|credito|crito)\b/.test(normalized)) {
-    return contas.find((item) => item.tipo === "cartao_credito" || /(credito|crédito|cartao|cartão)/.test(normalizeText(item.nome))) ?? null;
+    return (
+      contas.find(
+        (item) =>
+          item.tipo !== "cartao_credito" &&
+          /\binter\b/.test(normalizeText(item.nome)) &&
+          (!wantsLucas || /\blucas\b/.test(normalizeText(item.nome))),
+      ) ??
+      contas.find(
+        (item) =>
+          item.tipo !== "cartao_credito" &&
+          (!wantsLucas || /\blucas\b/.test(normalizeText(item.nome))),
+      ) ??
+      null
+    );
   }
 
   return null;
@@ -1081,8 +1094,9 @@ function findPreferredContaByFlow(
 
   if (tipo === "despesa" && meio === "credito") {
     return (
-      contas.find((item) => item.tipo === "cartao_credito") ??
-      contas.find((item) => /(credito|crédito|cartao|cartão)/.test(normalizeText(item.nome))) ??
+      nonCreditLucas.find((item) => /\binter\b/.test(normalizeText(item.nome))) ??
+      nonCreditLucas[0] ??
+      contas.find((item) => item.tipo !== "cartao_credito") ??
       null
     );
   }

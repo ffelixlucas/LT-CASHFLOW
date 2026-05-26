@@ -40,6 +40,7 @@ import {
   upsertPlanoFixosTemplate,
   deleteLancamentos,
   repairGestaoGastosFixoPrevistosDuplicados,
+  resolveContaIdForLancamento,
   updateCategoria,
   updateContaSaldoInicial,
   updateGestaoPercentualReserva,
@@ -597,11 +598,19 @@ export async function createParcelamentoCartaoAction(formData: FormData) {
     categoriaId: parsed.data.categoriaId,
   });
 
+  const contaCartaoId = await resolveContaIdForLancamento({
+    gestaoId,
+    contaId: parsed.data.contaId,
+    tipo: "despesa",
+    meio: "credito",
+  });
+
   try {
     await createParcelamentoNoCartao({
       gestaoId,
       userId: user.id,
       ...parsed.data,
+      contaId: contaCartaoId,
     });
   } catch {
     redirect(dashboardUrl(gestaoId, "parcelamento-invalido"));

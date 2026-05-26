@@ -196,6 +196,8 @@ export function DashboardActionCenter({
   const [gerarParcelasCartao, setGerarParcelasCartao] = useState(false);
   const selectedStatementConta = contas.find((conta) => conta.id === statementContaId) ?? null;
   const statementContaIsCredit = selectedStatementConta?.tipo === "cartao_credito";
+  const contasOperacionais = contas.filter((conta) => conta.tipo !== "cartao_credito");
+  const hasCartaoCredito = contas.some((conta) => conta.tipo === "cartao_credito");
   const selectedCategory = categorias.find((categoria) => categoria.id === selectedCategoryId) ?? null;
   const currentDashboardPath = `${pathname ?? "/dashboard"}${searchParams.size ? `?${searchParams.toString()}` : ""}`;
 
@@ -252,11 +254,10 @@ export function DashboardActionCenter({
   }, [openModal]);
 
   useEffect(() => {
-    const conta = contas.find((c) => c.id === launchDraft.contaId);
-    if (launchDraft.tipo !== "despesa" || launchDraft.meio !== "credito" || conta?.tipo !== "cartao_credito") {
+    if (launchDraft.tipo !== "despesa" || launchDraft.meio !== "credito" || !hasCartaoCredito) {
       setGerarParcelasCartao(false);
     }
-  }, [launchDraft.tipo, launchDraft.meio, launchDraft.contaId, contas]);
+  }, [launchDraft.tipo, launchDraft.meio, hasCartaoCredito]);
 
   function rememberLaunchDraft(form: HTMLFormElement) {
     const data = new FormData(form);
@@ -409,7 +410,7 @@ export function DashboardActionCenter({
         />
       ) : null}
 
-      <div className="fixed right-56 bottom-24 z-[70] flex flex-col items-end gap-2 sm:right-60 sm:bottom-28">
+      <div className="fixed right-4 bottom-24 z-[70] flex flex-col items-end gap-2 sm:right-6 sm:bottom-28">
         {menuOpen && gestaoId ? (
           <nav
             aria-label="Acoes rapidas"
@@ -892,7 +893,7 @@ export function DashboardActionCenter({
               required
             >
               <option value="">Conta</option>
-              {contas.map((conta) => (
+              {(launchDraft.tipo === "transferencia" ? contas : contasOperacionais).map((conta) => (
                 <option key={conta.id} value={conta.id}>
                   {conta.nome}
                 </option>
@@ -939,10 +940,12 @@ export function DashboardActionCenter({
               placeholder="R$ 0,00"
               required
             />
-            {launchDraft.tipo === "despesa" &&
-            launchDraft.meio === "credito" &&
-            contas.find((c) => c.id === launchDraft.contaId)?.tipo === "cartao_credito" ? (
+            {launchDraft.tipo === "despesa" && launchDraft.meio === "credito" && hasCartaoCredito ? (
               <div className="rounded-2xl border border-accent/30 bg-accent-soft/35 p-4 md:col-span-2">
+                <p className="mb-3 text-xs leading-relaxed text-muted">
+                  A conta selecionada fica como referencia operacional. Ao salvar, o LT envia a compra para a fatura do
+                  cartao de credito vinculado.
+                </p>
                 <label className="flex cursor-pointer items-start gap-3">
                   <input
                     checked={gerarParcelasCartao}
