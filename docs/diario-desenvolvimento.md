@@ -5,6 +5,45 @@ Formato: uma entrada por sessão relevante (mais recente no topo).
 
 ---
 
+## 2026-05-27 — Conciliação extrato Inter 27/04 a 27/05
+
+### Contexto
+
+Usuário informou extrato completo CSV da gestão Lucas (`gestao_id=2`) para Banco Inter, período 27/04/2026 a 27/05/2026, com saldo final R$ 1.012,50. Os Pix `63.156.552 Lucas Fanha Felix` foram tratados como `Future Trade`.
+
+### Ajustes de dados
+
+- Criado `#1567`: `Future Trade` — receita Pix — R$ 86,45 — 26/05/2026.
+- Corrigido `#1`: descrição `Future Trade` e valor R$ 51,45 — 27/05/2026.
+- Criados `#1568`, `#1569`, `#1570`: transporte R$ 6,13 e receitas `Future Trade` R$ 86,45/R$ 72,02 — 27/05/2026.
+- Corrigido `#1487`: saiu de 16/05/R$ 98,17 para 26/04/R$ 116,36 como ajuste anterior ao recorte do extrato.
+- Corrigidos `#1542` e `#1543`: R$ 260,20 para R$ 260,19 em 24/05/2026, conforme CSV.
+- Removido `#1563` e seu rateio: receita `Future Trade` R$ 86,45 em 26/07/2026, lançada com mês incorreto e fora do extrato.
+
+### Conferência
+
+CSV completo conferido contra a conta corrente no banco:
+
+- CSV: 228 lançamentos.
+- Banco: 228 lançamentos no período.
+- Total do período: -R$ 1.316,27 em ambos.
+- Dias divergentes: 0.
+- Valores divergentes por dia: 0.
+- Saldo derivado em 27/05/2026: R$ 1.012,50.
+
+Movimentos finais do recorte recente:
+
+| Dia | Movimento | Saldo do extrato |
+| --- | ---: | ---: |
+| 22/05/2026 | R$ 167,91 | R$ 2.653,74 |
+| 23/05/2026 | R$ 68,95 | R$ 2.722,69 |
+| 24/05/2026 | -R$ 2.722,69 | R$ 0,00 |
+| 25/05/2026 | R$ 471,21 | R$ 471,21 |
+| 26/05/2026 | R$ 265,48 | R$ 736,69 |
+| 27/05/2026 | R$ 275,81 | R$ 1.012,50 |
+
+---
+
 ## 2026-05-19 — Lançamento controlado familiar (produção privada)
 
 ### Contexto

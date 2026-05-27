@@ -528,7 +528,7 @@ export default async function MesesPage({ searchParams }: MesesPageProps) {
       <section className="card full" style={{ marginTop: 12 }}>
         <h3>Movimentações do mês</h3>
         <p className="muted" style={{ marginTop: 8 }}>
-          Extrato com filtros e paginação — mesmo comportamento do lançamentos no sistema.
+          Visão do sistema com corrente e cartão. Compras no crédito aparecem no mês da fatura; saldo real fica no dashboard.
         </p>
         <div style={{ marginTop: 12 }}>
           <RecentLancamentosTable
@@ -537,6 +537,7 @@ export default async function MesesPage({ searchParams }: MesesPageProps) {
             gestaoId={gestaoAtiva.id}
             lancamentos={lancamentosMes}
             saldoInicialDisponivel={saldoInicialDisponivel}
+            showGroupBalance={false}
             showFiltersSummary={false}
           />
         </div>
