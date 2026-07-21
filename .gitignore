@@ -37,8 +37,8 @@ docs/.registry.json
 docs/procloud-assistant-handoff.zip
 plano do cloud/
 pessoal/
-docs/.chunks/
-docs/.embeddings/
-docs/.registry.json
-docs/procloud-assistant-handoff.zip
-plano do cloud/
+
+# Local/sensitive operational data
+backend/database/scripts/seed*.sql
+docs/extratos/
+docs/*.pdf
